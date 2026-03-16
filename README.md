@@ -29,33 +29,33 @@ The structure of this repository is organized as follows:
 LightGBM-ST
 │
 ├── data
-│ └── real_GNSS
-│ └── (GNSS station datasets)
-
+│   └── real_GNSS
+│       ├── GSAX.csv
+│       ├── GSDH.csv
+│       ├── YNLJ.csv
+│       ├── YNYS.csv
+│       └── README.md
+│
 ├── src
-│ ├── ContrastExperiments.py
-│ ├── LGBMSTAblation.py
-│ └── SpatialCorrelation.py
-
-├── results
-│ └── (generated figures and experiment outputs)
-
-├── requirements.txt
-└── README.md
-
+│   ├── ablation_experiments.py
+│   ├── contrast_experiments.py
+│   └── spatial_correlation.py
+│
+├── README.md
+└── requirements.txt
 
 Description of key components:
 
 **src/**  
 Contains all scripts required to reproduce the experiments in the paper.
 
-- `ContrastExperiments.py`  
+- `contrast_experiments.py`  
   Performs comparison experiments between the proposed LightGBM-ST model and baseline interpolation methods.
 
-- `LGBMSTAblation.py`  
+- `ablation_experiments.py`  
   Conducts ablation studies to analyze the contribution of different components of the LightGBM-ST framework.
 
-- `SpatialCorrelation.py`  
+- `spatial_correlation.py`  
   Computes spatial correlations between GNSS stations, which are used as spatial features in the interpolation model.
 
 **data/**  
@@ -76,7 +76,7 @@ Each dataset file contains:
 - Vertical displacement values
 - Station information
 
-Both real GNSS datasets and synthetic missing-data experiments are included to evaluate the robustness of the proposed model.
+Real GNSS datasets are included to evaluate the robustness of the proposed model.
 
 ---
 
@@ -84,7 +84,7 @@ Both real GNSS datasets and synthetic missing-data experiments are included to e
 
 Python environment:
 
-Python >= 3.8
+Python >= 3.12
 
 
 Required Python packages:
@@ -97,11 +97,9 @@ lightgbm
 matplotlib
 seaborn
 
-
 Install dependencies using:
 
 pip install -r requirements.txt
-
 
 ---
 
