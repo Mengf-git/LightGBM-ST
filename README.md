@@ -1,105 +1,167 @@
-LightGBM-ST
-Spatiotemporal LightGBM-Based Interpolation for GNSS Time Series with Missing Data
-This repository provides the implementation of the LGBM-ST model, a spatiotemporal interpolation framework designed to reconstruct missing values in GNSS vertical displacement time series.
-The proposed method integrates temporal features and spatial correlations between GNSS stations within a LightGBM-based machine learning model to improve the accuracy and robustness of missing data reconstruction.
+# LightGBM-ST
 
-This repository contains the datasets and scripts required to reproduce the main experiments presented in the study.
+Code repository for the paper:
 
-Repository Structure
+**LGBM-ST: An Interpretable Spatiotemporal Interpolation Model for GNSS Time Series with Missing Data**
+
+This repository provides the implementation of the proposed **LightGBM-ST** framework for interpolating missing values in GNSS vertical displacement time series by incorporating both spatial and temporal information.
+
+---
+
+# Overview
+
+GNSS time series often contain missing observations due to equipment failure, environmental interference, or data transmission issues. Accurate reconstruction of missing values is essential for geophysical analysis.
+
+In this study, we propose **LightGBM-ST**, an interpretable spatiotemporal interpolation framework based on the LightGBM model. The proposed approach integrates:
+
+- Temporal features of GNSS time series
+- Spatial correlations between GNSS stations
+- Machine learning based regression modeling
+
+The framework is evaluated against several commonly used interpolation approaches and demonstrates improved robustness and prediction accuracy under different missing data scenarios.
+
+---
+
+# Repository Structure
+
+The structure of this repository is organized as follows:
+
 LightGBM-ST
 │
 ├── data
-│   └── real_GNSS
-│       ├── GSAX.csv
-│       ├── GSDH.csv
-│       ├── YNLJ.csv
-│       └── YNYS.csv
-│
+│ └── real_GNSS
+│ └── (GNSS station datasets)
+
 ├── src
-│   ├── contrast_experiments.py
-│   ├── ablation_experiments.py
-│   └── spatial_correlation.py
-│
+│ ├── ContrastExperiments.py
+│ ├── LGBMSTAblation.py
+│ └── SpatialCorrelation.py
+
+├── results
+│ └── (generated figures and experiment outputs)
+
+├── requirements.txt
 └── README.md
 
 
-Directory description
+Description of key components:
 
-data/
-Contains the GNSS vertical displacement datasets used in the experiments.
+**src/**  
+Contains all scripts required to reproduce the experiments in the paper.
 
-src/
-Contains Python scripts implementing the interpolation model and experimental procedures.
+- `ContrastExperiments.py`  
+  Performs comparison experiments between the proposed LightGBM-ST model and baseline interpolation methods.
 
-README.md
-Documentation describing the repository and how to reproduce the experiments.
+- `LGBMSTAblation.py`  
+  Conducts ablation studies to analyze the contribution of different components of the LightGBM-ST framework.
 
-Dataset
+- `SpatialCorrelation.py`  
+  Computes spatial correlations between GNSS stations, which are used as spatial features in the interpolation model.
 
-The repository includes GNSS vertical displacement time series from several stations used for interpolation experiments:
+**data/**  
+Contains the GNSS datasets used in the experiments.
 
-GSAX
-GSDH
-YNLJ
-YNYS
-All datasets are stored in:data/real_GNSS/
+**results/**  
+Stores generated figures and experimental outputs.
 
-Each dataset is stored as a CSV file containing the displacement observations used for model training and evaluation.
+---
 
-Requirements
+# Dataset
 
-The implementation is based on Python.
-Recommended Python version:Python >= 3.8
+The dataset used in this study consists of GNSS vertical displacement time series collected from multiple stations.
 
-Required Python libraries include:
+Each dataset file contains:
+
+- Observation time
+- Vertical displacement values
+- Station information
+
+Both real GNSS datasets and synthetic missing-data experiments are included to evaluate the robustness of the proposed model.
+
+---
+
+# Requirements
+
+Python environment:
+
+Python >= 3.8
+
+
+Required Python packages:
+
 numpy
 pandas
 scikit-learn
-lightgb
-matplotlib
 scipy
-
-You can install the required packages using pip:
-pip install numpy pandas scikit-learn lightgbm matplotlib scipy
-
-Running the Experiments
-
-The scripts provided in the src directory allow reproduction of the main experiments in the paper.
-
-1. Contrast Experiments
-
-To run the comparison experiments between LGBM-ST and other interpolation methods:
-python src/contrast_experiments.py
-
-These experiments evaluate the performance of different interpolation models under varying missing data rates.
-
-2. Ablation Experiments
-
-To analyze the contribution of different components in the LGBM-ST framework:
-python src/ablation_experiments.py
+lightgbm
+matplotlib
+seaborn
 
 
-This script performs ablation studies to assess the impact of spatiotemporal features on model performance.
+Install dependencies using:
 
-3. Spatial Correlation Analysis
-
-To compute spatial correlations between GNSS stations:
-
-python src/spatial_correlation.py
+pip install -r requirements.txt
 
 
-This analysis helps quantify spatial relationships used as input features for the interpolation model.
+---
 
-Reproducibility
+# Running the Experiments
 
-All scripts and datasets necessary for reproducing the core experimental results of the study are included in this repository.
+The experimental pipeline of the proposed LightGBM-ST framework consists of four main steps: spatial correlation analysis, feature construction, comparison experiments, and ablation analysis.
 
-By running the scripts provided in the src directory, users can reproduce the following analyses described in the manuscript:
+---
 
-interpolation performance comparison
+### Step 1: Spatial Correlation Analysis
 
-ablation experiments
+python src/SpatialCorrelation.py
 
-spatial correlation analysis between GNSS stations
+This step calculates the spatial correlations between GNSS stations based on their vertical displacement time series. Stations with strong correlations to the target station are identified and selected as candidate spatial features for the interpolation model.
 
-The repository structure is designed to ensure that the results presented in the paper can be reproduced.
+---
+
+### Step 2: Spatiotemporal Feature Construction
+
+Based on the selected correlated stations, spatial and temporal features are constructed to represent the spatiotemporal characteristics of GNSS time series. These features are then used as input variables for the LightGBM-ST interpolation model.
+
+---
+
+### Step 3: Comparison Experiments
+
+python src/ContrastExperiments.py
+
+This script evaluates the performance of the proposed LightGBM-ST model and several baseline interpolation methods under different missing data scenarios.
+
+The following evaluation metrics are used:
+
+- Root Mean Square Error (RMSE)
+- Mean Absolute Error (MAE)
+- Correlation Coefficient (R)
+
+---
+
+### Step 4: Ablation Experiments
+
+python src/LGBMSTAblation.py
+
+This script performs ablation studies to analyze the contributions of different components in the LightGBM-ST framework, particularly the impact of spatial features derived from correlated GNSS stations.
+
+# Reproducibility
+
+All datasets, scripts, and configurations required to reproduce the experimental results reported in the manuscript are provided in this repository.
+
+The experiments can be reproduced by executing the scripts in the `src` directory following the instructions above.
+
+---
+
+# Citation
+
+If you find this repository useful in your research, please consider citing the corresponding paper:
+
+LGBM-ST: An Interpretable Spatiotemporal Interpolation Model for GNSS Time Series with Missing Data
+
+
+---
+
+# License
+
+This project is intended for academic research and educational use.
