@@ -2,7 +2,7 @@
 GNSS时间序列缺失值插补对比实验
 ===========================================================
 1. 集成Akima、KNN、随机森林、三次样条插值方法
-2. 生成符合SCI论文标准的可视化对比图，可视化缺失和插值
+2. 生成可视化对比图，可视化缺失和插值
 3. 完整的方法性能对比实验
 """
 import os
@@ -64,10 +64,10 @@ RANDOM_SEED = 42
 LGBM_PARAMS = {
     'objective': 'regression',
     'metric': 'mae',
-    'learning_rate': 0.03,
-    'num_leaves': 31,
-    'max_depth': 6,
-    'n_estimators': 2000,
+    'learning_rate': 0.01,
+    'num_leaves': 40,
+    'max_depth': 8,
+    'n_estimators': 1000,
     'feature_fraction': 0.8,
     'bagging_fraction': 0.8,
     'bagging_freq': 5,
@@ -300,7 +300,6 @@ class SpatialCorrelationFeatureEngineering:
         df['doy_sin'] = np.sin(2 * np.pi * df.index.dayofyear / 365.25)
         df['doy_cos'] = np.cos(2 * np.pi * df.index.dayofyear / 365.25)
         df['month_norm'] = df.index.month / 12.0
-        years = pd.Series(df.index.year)
         df['year_norm'] = (years - years.mean()) / years.std()
 
         for lag in range(n_lags + 1):
@@ -461,11 +460,6 @@ def create_continuous_missing(data, n_segments, days_per_segment, seed=None):
     if seed is not None:
         np.random.seed(seed)
 
-    masked_data = data.copy()
-    missing_indices = []
-    n_total = len(data)
-    used_ranges = []
-
     required_space = n_segments * (days_per_segment + 10)
     if required_space > n_total:
         n_segments = max(1, n_total // (days_per_segment + 10))
@@ -504,11 +498,6 @@ def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segm
     n_missing = int(n_total * missing_ratio)
     masked_data = data.copy()
     missing_indices = []
-
-    current_pos = 0
-    max_attempts = 1000
-    attempts = 0
-
     while len(missing_indices) < n_missing and current_pos < n_total and attempts < max_attempts:
         attempts += 1
 
