@@ -10,39 +10,47 @@ import lightgbm as lgb
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib import rcParams
-import optuna  
-from optuna.samplers import TPESampler  
 import json
+import shap
 
 warnings.filterwarnings("ignore")
 
 # ----------------------
-# Uniform font settings
+# Unified Font Settings
 # ----------------------
-rcParams['font.family'] = ['SimHei', 'Times New Roman']
+rcParams['font.family'] = ['Times New Roman','Arial']
 rcParams['axes.unicode_minus'] = False
-rcParams['font.size'] = 12
-rcParams['axes.labelsize'] = 13
-rcParams['axes.titlesize'] = 15
-rcParams['legend.fontsize'] = 11
-rcParams['figure.titlesize'] = 16
+rcParams['font.size'] = 12           # Base font size
+rcParams['axes.labelsize'] = 12      # Axis label size
+rcParams['axes.titlesize'] = 13      # Subplot title size
+rcParams['legend.fontsize'] = 10     # Legend font size
+rcParams['figure.titlesize'] = 14    # Figure title size
+rcParams['xtick.labelsize'] = 10     # X-axis tick label size
+rcParams['ytick.labelsize'] = 10     # Y-axis tick label size
+rcParams['lines.linewidth'] = 1.8    # Line width
 
 # =====================================================================
-# Key Configuration Parameters
+# Core Configuration Parameters
 # =====================================================================
-FOLDER = "../data/real_GNSS"
+FOLDER = "D:/Grade 1/GNSS-LSTM+Attention+SG/Spatial Correlation - Machine Learning/YNYS"
 TARGET_STATION = "YNYS"
 NEIGHBOR_STATION = "YNLJ"
 TIME_COL = "YYYYMMDD"
 VALUE_COL = "U(m)"
-
+START_DATE = "2016-03-28"
+END_DATE = "2019-06-09"
+N_REPEATS = 10  # Number of repetitions per experiment
+RANDOM_SEED = 42
+CORRELATION_R = 0.8503  # Obtained from spatial correlation analysis
+NEIGHBOR_DIST_KM = 71.56  # Inter-station distance
+BIAS_VALUE = -2.6672  # Systematic bias obtained from spatial analysis
 
 # LightGBM Hyperparameters
 LGBM_PARAMS = {
     'objective': 'regression',
     'metric': 'mae',
     'learning_rate': 0.03,
-    'num_leaves': 15,
+    'num_leaves': 31,
     'max_depth': 6,
     'n_estimators': 2000,
     'feature_fraction': 0.8,
@@ -54,170 +62,52 @@ LGBM_PARAMS = {
     'verbose': -1
 }
 
-# =====================================================================
-# Hyperparameter Optimization Module
-# =====================================================================
-import optuna
-from optuna.samplers import TPESampler
-
-
-def optimize_lgbm_hyperparameters(target_data, neighbor_data, output_folder, n_trials=100):
-    """
-    Using Optuna for LightGBM Hyperparameter Optimization
-    Ensure full consistency with the feature engineering process in the experimental workflow
-    """
-    print("\n" + "=" * 80)
-    print("🔍 Optuna Bayesian Optimization ")
-    print("=" * 80)
-
-
-    # Prepare the data index (consistent with the experiment)
-    total_length = len(target_data)
-    train_end = int(0.6 * total_length)
-    val_end = int(0.8 * total_length)
-
-    train_idx = target_data.index[:train_end]
-    val_idx = target_data.index[train_end:val_end]
-
-    # ⚠️ Key: Use `train_idx.union(val_idx)` to fit the bias correction (consistent with the experiment)
-    print("\nFitting the bias correction model...")
-    feature_engineer.fit_bias_correction(
-        target_data.loc[train_idx.union(val_idx)],
-        neighbor_data.loc[train_idx.union(val_idx)]
-    )
-
-    # ⚠️ Key: Use the complete target_data (with no manually imputed missing values) when building features.
-    df_features = feature_engineer.create_features(
-        target_data,  
-        neighbor_data,
-        n_lags=7,
-        rolling_windows=[3, 7, 14],
-        include_target_lags=True,
-        use_neighbor_lag0=True
-    )
-
-    # Prepare training/validation data (consistent with the experiment)
-    train_df = df_features.loc[train_idx.union(val_idx)].dropna(subset=['target'])
-
-    # ⚠️ Key: Split the data into a 8:2 training/validation split
-    split_point = int(0.8 * len(train_df))
-
-    train_split = train_df.iloc[:split_point]
-    val_split = train_df.iloc[split_point:]
-
-    # Feature Extraction and Object Detection
-    X_train = train_split.drop(columns=['target', 'neighbor'], errors='ignore')
-    y_train = train_split['target']
-    X_train = X_train.fillna(X_train.mean())
-
-    X_val = val_split.drop(columns=['target', 'neighbor'], errors='ignore')
-    y_val = val_split['target']
-    X_val = X_val.fillna(X_train.mean())  # Pad with the mean of the training set
-
-    print(f"\nData Segmentation:")
-    print(f"  training set: {len(X_train)} Sample")
-    print(f"  Validation set: {len(X_val)} Sample")
-    print(f"  Number of features: {X_train.shape[1]}")
-
-    def objective(trial):
-        """Optuna Objective function"""
-        params = {
-            'objective': 'regression',
-            'metric': 'mae',
-            'verbosity': -1,
-            'random_state': RANDOM_SEED,
-
-            # Hyperparameter search space
-            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
-            'num_leaves': trial.suggest_int('num_leaves', 10, 50),
-            'max_depth': trial.suggest_int('max_depth', 3, 12),
-            'n_estimators': trial.suggest_int('n_estimators', 500, 3000, step=500),
-            'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
-            'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
-            'min_child_samples': trial.suggest_int('min_child_samples', 5, 100),
-            'feature_fraction': trial.suggest_float('feature_fraction', 0.6, 1.0),
-            'bagging_fraction': trial.suggest_float('bagging_fraction', 0.6, 1.0),
-            'bagging_freq': trial.suggest_int('bagging_freq', 1, 7),
-        }
-
-        model = lgb.LGBMRegressor(**params)
-        model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
-            callbacks=[lgb.early_stopping(100, verbose=False)]
-        )
-
-        y_pred = model.predict(X_val)
-        mae = mean_absolute_error(y_val, y_pred)
-
-        return mae
-
-    # Performance Optimization
-    study = optuna.create_study(
-        direction='minimize',
-        sampler=TPESampler(seed=RANDOM_SEED)
-    )
-
-    print(f"\nStart optimization ({n_trials} trials in total)...")
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
-
-    # Output
-    print("\n" + "=" * 80)
-    print("✅ Optimization complete!")
-    print("=" * 80)
-  
-    for key, value in study.best_params.items():
-        print(f"  {key:20s}: {value}")
-
-
-    try:
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-        optuna.visualization.matplotlib.plot_optimization_history(study, ax=axes[0])
-        axes[0].set_title('Optimization History', fontsize=14, fontweight='bold')
-
-        optuna.visualization.matplotlib.plot_param_importances(study, ax=axes[1])
-        axes[1].set_title('Hyperparameter Importances', fontsize=14, fontweight='bold')
-
-        plt.tight_layout()
-        save_path = os.path.join(output_folder, 'hyperparameter_optimization.png')
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-    except Exception as e:
-        print(f"[Warning] Visualization failed: {e}")
-
-    return study.best_params
-
 
 # =====================================================================
+
 
 class SpatialCorrelationFeatureEngineering:
-    """Spatial Correlation Feature Engineering"""
+    """Spatial correlation feature engineering class"""
 
     def __init__(self, correlation_r, neighbor_dist_km, bias_value):
-
-
+        """
+        Parameters:
+            correlation_r: Pearson correlation coefficient
+            neighbor_dist_km: Inter-station distance (km)
+            bias_value: Systematic bias (target - neighbor)
+        """
+        self.correlation_r = correlation_r
+        self.neighbor_dist_km = neighbor_dist_km
+        self.bias_value = bias_value
+        self.ols_model = None
 
     def fit_bias_correction(self, target_series, neighbor_series):
         """
-        Fit an OLS bias-corrected model on the training set
+        Fit OLS bias correction model on training set:
         U_target = a + b * U_neighbor
         """
         valid_mask = target_series.notna() & neighbor_series.notna()
 
         if valid_mask.sum() < 30:
-            print("    [Warning] Insufficient training data; using default parameters")
+            print("    [Warning] Insufficient training samples, using default parameters")
             self.ols_model = {'intercept': 0.0, 'coef': 1.0}
             return
+
+        X = neighbor_series[valid_mask].values.reshape(-1, 1)
+        y = target_series[valid_mask].values
+
+        lr = LinearRegression()
+        lr.fit(X, y)
 
         self.ols_model = {
             'intercept': lr.intercept_,
             'coef': lr.coef_[0]
         }
 
-        print(f"    ✓ Bias校正: U_target = {lr.intercept_:.4f} + {lr.coef_[0]:.4f} * U_neighbor")
+        print(f"    ✓ Bias correction: U_target = {lr.intercept_:.4f} + {lr.coef_[0]:.4f} * U_neighbor")
 
     def apply_bias_correction(self, neighbor_series):
-        """Apply Bias Correction"""
+        """Apply bias correction"""
         if self.ols_model is None:
             return neighbor_series.copy()
 
@@ -225,151 +115,379 @@ class SpatialCorrelationFeatureEngineering:
 
     def create_features(self, target_series, neighbor_series,
                         n_lags=7, rolling_windows=[3, 7, 14],
-                        include_target_lags=True, use_neighbor_lag0=True):
+                        include_target_lags=True, use_neighbor_lag0=False):
         """
-        Constructing a Complete Feature Matrix
+        Construct complete feature matrix
 
-        Feature Categories:
-        1. Temporal Features: doy_sin, doy_cos, month, year
-        2. Neighbor Station Lags: nbr_lag0–lagN
-        3. Rolling statistics from neighboring stations: rollmean, rollstd (multi-window)
-        4. Target station history: tgt_lag1–lag3 (past values only)
+        Feature categories:
+        1. Temporal features: doy_sin, doy_cos, month, year
+        2. Neighbor station lags: nbr_lag0~lagN
+        3. Neighbor station rolling statistics: rollmean, rollstd (multi-window)
+        4. Target station history: tgt_lag1~lag3 (past values only)
         5. Spatial meta-features: neighbor_r, neighbor_dist_km
         6. Bias correction features: nbr_adj_lag0
-        7. Missing value indicators: nbr_isnan_lag0
+        7. Missing indicators: nbr_isnan_lag0
         """
-        # Build DataFrame
+        """
+        Construct reduced feature matrix (Scheme A: Conservative reduction)
+
+        Removed features:
+        - month_norm (redundant with doy_sin/cos)
+        - nbr_lag4, nbr_lag5, nbr_lag7 (redundant long lags)
+        - tgt_lag3, tgt_lag7 (redundant long lags)
+        - nbr_rollmin_*, nbr_rollmax_* (redundant statistics)
+        - 14-day window rolling statistics (redundant with 7-day window)
+
+        Retained feature categories:
+        1. Temporal features: doy_sin, doy_cos, year_norm
+        2. Neighbor lags: nbr_lag0~lag3 (removed 4, 5, 7)
+        3. Neighbor rolling statistics: rollmean, rollstd (3 and 7-day windows only, removed min/max)
+        4. Target station history: tgt_lag1, tgt_lag2 (removed 3, 7)
+        5. Spatial meta-features: neighbor_r, neighbor_dist_km, spatial_weight
+        6. Dynamic spatial features: spatial_corr_*, nbr_tgt_diff_std_*
+        7. Bias correction features: nbr_adj_lag0~lag2
+        8. Missing indicators: nbr_isnan_lag0, n_neighbors_available, nbr_consecutive_valid
+        """
+        # Create DataFrame
         df = pd.DataFrame({
             'target': target_series,
             'neighbor': neighbor_series
         })
 
-        # === 1. Temporal characteristics ===
+        # === 1. Temporal features ===
         df['doy_sin'] = np.sin(2 * np.pi * df.index.dayofyear / 365.25)
         df['doy_cos'] = np.cos(2 * np.pi * df.index.dayofyear / 365.25)
+        # df['month_norm'] = df.index.month / 12.0
+        years = pd.Series(df.index.year)
+        df['year_norm'] = (years - years.mean()) / years.std()
 
-
-        # === 2. 邻站滞后特征 (lag0允许用于离线插补) ===
+        # === 2. Neighbor station lag features (lag0 allowed for offline imputation) ===
+        # (Restricted to lag0~lag3; lags 4, 5, 7 removed)
+        max_useful_lag = 3
         for lag in range(n_lags + 1):
             if lag == 0 and not use_neighbor_lag0:
                 continue
             df[f'nbr_lag{lag}'] = df['neighbor'].shift(lag)
 
-        # === 3. Neighboring station lag feature (lag0 is permitted for offline interpolation) ===
+        # === 3. Neighbor station rolling statistics (past window only) ===
+        # Only 7-day window retained; min/max and 14-day window removed
+        useful_windows = [w for w in rolling_windows if w in [3, 7]]
         for window in rolling_windows:
-            # Note: Use `shift(1)` to ensure the current value is not included.
+            # shift(1) ensures current value is excluded
+            # Only mean and std retained; max/min removed
             df[f'nbr_rollmean_{window}'] = df['neighbor'].shift(1).rolling(
                 window, min_periods=1).mean()
             df[f'nbr_rollstd_{window}'] = df['neighbor'].shift(1).rolling(
                 window, min_periods=1).std().fillna(0)
+            #df[f'nbr_rollmax_{window}'] = df['neighbor'].shift(1).rolling(
+                #window, min_periods=1).max()
+            #df[f'nbr_rollmin_{window}'] = df['neighbor'].shift(1).rolling(
+                #window, min_periods=1).min()
 
-
-        # === 4. Historical lag for the target station (past values only) ===
+        # === 4. Target station historical lags (past values only; only lag1, lag2 retained) ===
         if include_target_lags:
-            for lag in [1, 2, 3, 7]:
+            for lag in [1, 2,]:
                 df[f'tgt_lag{lag}'] = df['target'].shift(lag)
 
+        # === 5. Spatial meta-features (static) ===
+        df['neighbor_r'] = self.correlation_r
+        df['neighbor_dist_km'] = self.neighbor_dist_km
+        df['spatial_weight'] = self.correlation_r / (self.neighbor_dist_km + 1e-3)
 
-        # === 5. Bias Calibration characteristics ===
+        # === 5.5 Dynamic spatial consistency features ===
+        # Rolling spatial correlation within time windows
+        for window in [30, 60]:
+            # Rolling correlation between target and neighbor stations
+            rolling_corr = df['target'].rolling(window).corr(df['neighbor'])
+            df[f'spatial_corr_{window}d'] = rolling_corr.shift(1)  # shift to avoid data leakage
+
+            # Rolling std of difference between neighbor and target (captures systematic bias variation)
+            diff = (df['neighbor'] - df['target']).shift(1)
+            df[f'nbr_tgt_diff_std_{window}d'] = diff.rolling(window).std().fillna(0)
+
+        # Consecutive valid days for neighbor station (assesses neighbor data quality)
+        df['nbr_consecutive_valid'] = (~df['neighbor'].isna()).astype(int).groupby(
+            (df['neighbor'].isna() != df['neighbor'].isna().shift()).cumsum()
+        ).cumsum()
+
+        # === 6. Bias correction features ===
         if self.ols_model is not None:
             nbr_adj = self.apply_bias_correction(df['neighbor'])
             for lag in range(min(3, n_lags + 1)):
                 df[f'nbr_adj_lag{lag}'] = nbr_adj.shift(lag)
 
-        # === 6. Missing metric ===
+        # === 7. Missing value indicators ===
         df['nbr_isnan_lag0'] = df['neighbor'].isna().astype(int)
         df['n_neighbors_available'] = (~df['neighbor'].isna()).astype(int)
 
         return df
 
+    @staticmethod
+    def get_feature_groups():
+        """
+        Return feature group definitions (used for ablation studies)
+        """
+        return {
+            'time': ['doy_sin', 'doy_cos', 'year_norm'],
+
+            'target_history': ['tgt_lag1', 'tgt_lag2'],
+
+            'neighbor_basic': [
+                # Neighbor station lags
+                'nbr_lag0', 'nbr_lag1', 'nbr_lag2', 'nbr_lag3',
+                # Neighbor rolling statistics
+                'nbr_rollmean_3', 'nbr_rollstd_3',
+                'nbr_rollmean_7', 'nbr_rollstd_7',
+                'nbr_rollmean_14', 'nbr_rollstd_14',
+                # Missing indicators
+                'nbr_isnan_lag0', 'n_neighbors_available',
+                'nbr_consecutive_valid'
+            ],
+
+            'spatial_meta': [
+                'neighbor_r', 'neighbor_dist_km', 'spatial_weight'
+            ],
+
+            'spatial_dynamic': [
+                'spatial_corr_30d', 'spatial_corr_60d',
+                'nbr_tgt_diff_std_30d', 'nbr_tgt_diff_std_60d'
+            ],
+
+            'bias_correction': [
+                'nbr_adj_lag0', 'nbr_adj_lag1', 'nbr_adj_lag2'
+            ]
+        }
+
+    @staticmethod
+    def select_features_by_groups(df_features, group_names):
+        """
+        Select features by group names
+
+        Parameters:
+            df_features: Complete feature DataFrame
+            group_names: list of str, names of feature groups to include
+
+        Returns:
+            selected_features: List of selected feature column names
+        """
+        feature_groups = SpatialCorrelationFeatureEngineering.get_feature_groups()
+        selected = []
+
+        for group_name in group_names:
+            if group_name in feature_groups:
+                selected.extend(feature_groups[group_name])
+
+        # Retain only features that actually exist in the DataFrame
+        existing_features = [f for f in selected if f in df_features.columns]
+
+        # Always retain target and neighbor columns (for downstream processing)
+        return existing_features
+
 
 class LightGBMSpatialInterpolator:
-    """A Spatially Correlated Interpolator Based on LightGBM"""
+    """LightGBM-based spatial correlation interpolator"""
 
     def __init__(self, feature_engineer, lgbm_params=None):
         self.feature_engineer = feature_engineer
         self.lgbm_params = lgbm_params or LGBM_PARAMS
-        self.models = []  # Store the Bootstrap model collection
+        self.model = None
         self.feature_names = None
+        # ========== New: SHAP-related attributes ==========
+        self.shap_explainer = None
+        self.shap_values = None
+        self.X_sample_for_shap = None
 
     def _prepare_train_data(self, df_features, train_idx):
         """Prepare training data"""
         train_df = df_features.loc[train_idx]
 
-        # Keep only rows where target is not NaN
+        # Retain only rows where target is non-NaN
         train_df = train_df.dropna(subset=['target'])
 
         if len(train_df) < 50:
-            raise ValueError(f"Insufficient training data: {len(train_df)}")
+            raise ValueError(f"Insufficient training samples: {len(train_df)}")
 
-        # NaN values in features (replaced with the mean of the training set)
+        # Separate features and target
+        X = train_df.drop(columns=['target', 'neighbor'], errors='ignore')
+        y = train_df['target']
+
+        # Fill NaN in features with training set mean
         X = X.fillna(X.mean())
 
         self.feature_names = X.columns.tolist()
 
         return X, y
 
-    def train_single_model(self, X_train, y_train, X_val=None, y_val=None):
+    def train(self, df_features, train_idx):
         """Train a single LightGBM model"""
-        model = lgb.LGBMRegressor(**self.lgbm_params)
+        print(f"    Training LightGBM model...")
 
-        if X_val is not None and y_val is not None:
-            model.fit(
-                X_train, y_train,
-                eval_set=[(X_val, y_val)],
-                callbacks=[lgb.early_stopping(100, verbose=False)]
-            )
-        else:
-            model.fit(X_train, y_train)
+        # Prepare full training data
+        X_full, y_full = self._prepare_train_data(df_features, train_idx)
 
-        return model
+        # Split into Train/Val (time series split)
+        split_point = int(0.8 * len(X_full))
+        X_train = X_full.iloc[:split_point]
+        y_train = y_full.iloc[:split_point]
+        X_val = X_full.iloc[split_point:]
+        y_val = y_full.iloc[split_point:]
+
+        # Train model
+        self.model = lgb.LGBMRegressor(**self.lgbm_params)
+        self.model.fit(
+            X_train, y_train,
+            eval_set=[(X_val, y_val)],
+            callbacks=[lgb.early_stopping(100)]
+        )
+
+        print(f"    ✓ Model training complete")
+
+    def predict(self, df_features, predict_idx):
+        """Generate predictions"""
+        X_pred = df_features.loc[predict_idx].drop(
+            columns=['target', 'neighbor'], errors='ignore')
+
+        # Fill NaN
+        X_pred = X_pred.fillna(X_pred.mean())
+
+        # Predict
+        pred = self.model.predict(X_pred)
+
+        return pred
 
     def get_feature_importance(self, top_n=15):
-        """Obtain feature importance (averaged across all models)"""
-        if not self.models:
+        """Retrieve feature importance"""
+        if self.model is None:
             return None
 
-        # Average feature importance across all models
-        importances = np.zeros(len(self.feature_names))
+        # Get feature importances
+        importances = self.model.feature_importances_
 
-        for model in self.models:
-            importances += model.feature_importances_
+        # Sort and return top_n
+        importance_df = pd.DataFrame({
+            'feature': self.feature_names,
+            'importance': importances
+        }).sort_values('importance', ascending=False).head(top_n)
 
-        importances /= len(self.models)
+        return importance_df
 
+    # ========== New: SHAP-related methods ==========
 
+    def compute_shap_values(self, X_data, max_samples=1000):
+        """
+        Compute SHAP values
+
+        Parameters:
+            X_data: Feature matrix (DataFrame)
+            max_samples: Maximum number of samples for SHAP computation (SHAP is computationally expensive)
+
+        Returns:
+            shap_values: SHAP value array
+            X_sample: Sample used for computation
+        """
+        if self.model is None:
+            raise ValueError("Model not trained. Please call train() first.")
+
+        # Limit sample size to accelerate computation
+        if len(X_data) > max_samples:
+            print(f"    Sampling {max_samples}/{len(X_data)} samples for SHAP computation...")
+            sample_indices = np.random.choice(len(X_data), max_samples, replace=False)
+            X_sample = X_data.iloc[sample_indices].copy()
+        else:
+            X_sample = X_data.copy()
+
+        print(f"    Computing SHAP values (sample size: {len(X_sample)})...")
+
+        try:
+            # Create SHAP explainer (TreeExplainer is suitable for tree-based models)
+            self.shap_explainer = shap.TreeExplainer(self.model)
+
+            # Compute SHAP values
+            self.shap_values = self.shap_explainer.shap_values(X_sample)
+            self.X_sample_for_shap = X_sample
+
+            print(f"    ✓ SHAP computation complete")
+
+        except Exception as e:
+            print(f"    [Warning] SHAP computation failed: {e}")
+            self.shap_values = None
+            self.X_sample_for_shap = None
+            return None, None
+
+        return self.shap_values, X_sample
+
+    def get_shap_feature_importance(self, top_n=15):
+        """
+        Global feature importance based on SHAP values
+
+        Returns:
+            DataFrame: Feature importance ranking
+        """
+        if self.shap_values is None:
+            raise ValueError("Please call compute_shap_values() first.")
+
+        # Global importance = mean of |SHAP values|
+        shap_importance = np.abs(self.shap_values).mean(axis=0)
+
+        importance_df = pd.DataFrame({
+            'feature': self.feature_names,
+            'shap_importance': shap_importance
+        }).sort_values('shap_importance', ascending=False).head(top_n)
+
+        return importance_df
+
+    def compare_feature_importance_methods(self):
+        """
+        Compare LightGBM built-in and SHAP feature importance methods
+
+        Returns:
+            DataFrame: Importance values and rank comparison from both methods
+        """
+        if self.shap_values is None:
+            raise ValueError("Please call compute_shap_values() first.")
+
+        # 1. LightGBM built-in importance
+        lgbm_importance = self.model.feature_importances_
+
+        # 2. SHAP importance
+        shap_importance = np.abs(self.shap_values).mean(axis=0)
+
+        # Build comparison table
+        comparison_df = pd.DataFrame({
+            'feature': self.feature_names,
+            'lgbm_importance': lgbm_importance,
+            'shap_importance': shap_importance
+        })
+
+        # Normalize to [0, 1]
+        comparison_df['lgbm_norm'] = (
+                comparison_df['lgbm_importance'] / comparison_df['lgbm_importance'].sum()
+        )
+        comparison_df['shap_norm'] = (
+                comparison_df['shap_importance'] / comparison_df['shap_importance'].sum()
+        )
+
+        # Compute ranks
+        comparison_df['lgbm_rank'] = comparison_df['lgbm_importance'].rank(ascending=False)
+        comparison_df['shap_rank'] = comparison_df['shap_importance'].rank(ascending=False)
+        comparison_df['rank_diff'] = abs(comparison_df['lgbm_rank'] - comparison_df['shap_rank'])
+
+        return comparison_df.sort_values('shap_importance', ascending=False)
+
+    # ===============================================
 
 
 class BaselineInterpolators:
     """Baseline interpolation methods"""
 
     @staticmethod
-    def time_only_baseline(df_features, train_idx, test_idx):
+    def time_plus_history_only(df_features, train_idx, test_idx):
         """
-        Baseline A: Use time-based features only
+        New: Temporal features + target station history (true no-spatial-information baseline).
+        This is the key control group for evaluating the contribution of spatial information.
         """
-        time_features = ['doy_sin', 'doy_cos', 'month_norm', 'year_norm']
-
-        train_df = df_features.loc[train_idx].dropna(subset=['target'])
-        X_train = train_df[time_features].fillna(0)
-        y_train = train_df['target']
-
-        model = lgb.LGBMRegressor(**LGBM_PARAMS)
-        model.fit(X_train, y_train)
-
-        test_df = df_features.loc[test_idx]
-        X_test = test_df[time_features].fillna(0)
-        pred = model.predict(X_test)
-
-        return pred
-
-    @staticmethod
-    def time_plus_target_lags(df_features, train_idx, test_idx):
-        """
-        Baseline B: Time-based features + History of destination stations
-        """
-        features = ['doy_sin', 'doy_cos', 'month_norm', 'year_norm',
-                    'tgt_lag1', 'tgt_lag2', 'tgt_lag3', 'tgt_lag7']
+        features = ['doy_sin', 'doy_cos', 'year_norm',
+                    'tgt_lag1', 'tgt_lag2']
 
         train_df = df_features.loc[train_idx].dropna(subset=['target'])
         X_train = train_df[features].fillna(train_df[features].mean())
@@ -386,34 +504,27 @@ class BaselineInterpolators:
 
     @staticmethod
     def linear_interpolation(series, missing_indices):
-        """Linear Interpolation Baseline"""
+        """Linear interpolation baseline
+
+        Parameters:
+            series: pd.Series, series with missing values
+            missing_indices: DatetimeIndex or list of integer positions
+        """
         filled = series.copy()
 
-        
+        # Use .loc for DatetimeIndex; use .iloc for integer positional index
         if isinstance(missing_indices, pd.DatetimeIndex):
-            # Index directly using DatetimeIndex
             filled.loc[missing_indices] = np.nan
             filled = filled.interpolate(method='linear').bfill().ffill()
             return filled.loc[missing_indices].values
         else:
-            # The case of integer indexes
-            if not isinstance(missing_indices, (list, np.ndarray, pd.Index)):
-                raise ValueError("missing_indices must be a list, numpy array or pandas Index")
-
-            missing_indices = np.array(missing_indices, dtype=int)
-            if len(missing_indices) == 0:
-                return np.array([])
-
-            # Ensure that the index is within the valid range
-            if (missing_indices < 0).any() or (missing_indices >= len(series)).any():
-                raise ValueError("Some indices are out of bounds")
-
+            # Assume integer positional index
             filled.iloc[missing_indices] = np.nan
             filled = filled.interpolate(method='linear').bfill().ffill()
             return filled.iloc[missing_indices].values
 
-def create_continuous_missing(data, n_segments, days_per_segment, seed=None):
-    """Create a continuous missing segment """
+    def create_continuous_missing(data, n_segments, days_per_segment, seed=None):
+    """Create continuous missing segments (keep consistent with original code)"""
     if seed is not None:
         np.random.seed(seed)
 
@@ -441,13 +552,18 @@ def create_continuous_missing(data, n_segments, days_per_segment, seed=None):
                     for r in used_ranges
                 )
 
+                if not too_close:
+                    used_ranges.append(candidate)
+                    missing_indices.extend(candidate)
+                    segments_created += 1
+                    break
 
     masked_data.iloc[missing_indices] = np.nan
     return masked_data, sorted(list(set(missing_indices))), segments_created
 
 
 def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segment=30, seed=None):
-    """Create a random cluster with missing values"""
+    """Create random clustered missing data"""
     if seed is not None:
         np.random.seed(seed)
 
@@ -465,11 +581,11 @@ def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segm
 
         remaining = n_total - current_pos
 
-        # Calculate the jump distance
+        # Calculate jump distance (avoid randint parameter error)
         if remaining > 30:
             jump = np.random.randint(5, min(30, remaining // 2))
         elif remaining > 2:
-            jump_max = max(2, remaining // 2)  
+            jump_max = max(2, remaining // 2)  # Ensure at least 2
             jump = np.random.randint(1, jump_max)
         else:
             jump = 1
@@ -482,9 +598,17 @@ def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segm
         remaining_missing = n_missing - len(missing_indices)
         upper_bound = min(max_segment, remaining_missing + 1)
 
+        # Calculate missing segment length (avoid randint parameter error)
+        if upper_bound <= min_segment:
+            segment_length = min(remaining_missing, n_total - current_pos)
+        else:
+            segment_length = np.random.randint(min_segment, upper_bound)
 
+        end_pos = min(current_pos + segment_length, n_total)
+        missing_indices.extend(range(current_pos, end_pos))
+        current_pos = end_pos
 
-    # Ensure the accuracy of the missing quantities
+    # Ensure accurate missing count
     missing_indices = sorted(list(set(missing_indices)))[:n_missing]
 
     if len(missing_indices) < n_missing:
@@ -502,36 +626,28 @@ def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segm
     return masked_data, missing_indices
 
 
-def calculate_metrics(true_values, predicted_values, pred_lower, pred_upper, missing_indices):
+def calculate_metrics(true_values, predicted_values, missing_indices):
     """
-    Calculate evaluation metrics + CI coverage
+    Calculate evaluation metrics
 
     Parameters:
-        true_values: Series, actual values (complete data)
-        predicted_values: array-like, predicted values (missing positions only)
-        pred_lower: array-like, lower confidence bound
-        pred_upper: array-like, upper confidence bound
+        true_values: Series, true values (complete data)
+        predicted_values: array-like, predicted values (only missing positions)
         missing_indices: DatetimeIndex or list, indices of missing positions
     """
-    # Ensure that `missing_indices` is a valid index
+    # Ensure missing_indices is a valid index
     if isinstance(missing_indices, pd.DatetimeIndex):
         valid_indices = missing_indices
     else:
         valid_indices = pd.DatetimeIndex(missing_indices)
 
-    # Convert the predicted values to a Series, using `missing_indices` as the index
+    # Convert predicted values to Series using missing_indices as index
     if isinstance(predicted_values, pd.Series):
         pred_series = predicted_values
     else:
         pred_series = pd.Series(predicted_values, index=valid_indices)
 
-    if pred_lower is not None and not isinstance(pred_lower, pd.Series):
-        pred_lower = pd.Series(pred_lower, index=valid_indices)
-
-    if pred_upper is not None and not isinstance(pred_upper, pd.Series):
-        pred_upper = pd.Series(pred_upper, index=valid_indices)
-
-    # Retrieve actual and forecast values
+    # Extract true and predicted values
     true_missing = true_values.loc[valid_indices]
     pred_missing = pred_series.loc[valid_indices]
 
@@ -567,20 +683,59 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
                                  missing_days_list, missing_ratios,
                                  output_folder):
     """
-    Run the full LightGBM+spatial correlation experiment
+    Run complete LightGBM + spatial correlation fusion interpolation experiments
     """
     print("\n" + "=" * 80)
-    print("🚀 LightGBM + Experiments on Spatial Correlation Fusion Interpolation")
+    print("🚀 LightGBM + Spatial Correlation Fusion Interpolation Experiments")
     print("=" * 80)
-
-    # Initial Feature Engineering
+    # ✅ Define global model configuration
+    MODELS_CONFIG = {
+        'baseline_time': {
+            'name': 'Baseline: Time Only',
+            'groups': ['time'],
+            'description': 'Time features only'
+        },
+        'baseline_history': {
+            'name': 'Baseline: Time + History',
+            'groups': ['time', 'target_history'],
+            'description': 'Time + target station history'
+        },
+        'ablation_basic_neighbor': {
+            'name': 'Ablation: + Basic Neighbor',
+            'groups': ['time', 'target_history', 'neighbor_basic'],
+            'description': '+ Basic neighbor features (core spatial information)'
+        },
+        'ablation_with_meta': {
+            'name': 'Ablation: + Spatial Meta',
+            'groups': ['time', 'target_history', 'neighbor_basic', 'spatial_meta'],
+            'description': '+ Static spatial meta features'
+        },
+        'ablation_with_dynamic': {
+            'name': 'Ablation: + Dynamic Spatial',
+            'groups': ['time', 'target_history', 'neighbor_basic',
+                       'spatial_meta', 'spatial_dynamic'],
+            'description': '+ Dynamic spatial features'
+        },
+        'full_model': {
+            'name': 'Full Model',
+            'groups': ['time', 'target_history', 'neighbor_basic',
+                       'spatial_meta', 'spatial_dynamic', 'bias_correction'],
+            'description': 'Full model (with Bias correction)'
+        },
+        'linear': {
+            'name': 'Baseline: Linear Interpolation',
+            'groups': None,
+            'description': 'Linear interpolation baseline'
+        }
+    }
+    # Initialize feature engineering
     feature_engineer = SpatialCorrelationFeatureEngineering(
         correlation_r=CORRELATION_R,
         neighbor_dist_km=NEIGHBOR_DIST_KM,
         bias_value=BIAS_VALUE
     )
 
-    # Prepare the data index
+    # Prepare data indices
     total_length = len(target_data)
     train_end = int(0.6 * total_length)
     val_end = int(0.8 * total_length)
@@ -589,13 +744,13 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
     val_idx = target_data.index[train_end:val_end]
     test_idx = target_data.index[val_end:]
 
-    print(f"\nData Segmentation:")
-    print(f"  Train: {len(train_idx)} Day ({train_idx[0].date()} ~ {train_idx[-1].date()})")
-    print(f"  Val:   {len(val_idx)} Day ({val_idx[0].date()} ~ {val_idx[-1].date()})")
-    print(f"  Test:  {len(test_idx)} Day ({test_idx[0].date()} ~ {test_idx[-1].date()})")
+    print(f"\nData Split:")
+    print(f"  Train: {len(train_idx)} days ({train_idx[0].date()} ~ {train_idx[-1].date()})")
+    print(f"  Val:   {len(val_idx)} days ({val_idx[0].date()} ~ {val_idx[-1].date()})")
+    print(f"  Test:  {len(test_idx)} days ({test_idx[0].date()} ~ {test_idx[-1].date()})")
 
-    # Fitting bias correction on the training set
-    print("\nFitting the bias correction model...")
+    # Fit Bias correction on training set
+    print("\nFitting Bias correction model...")
     feature_engineer.fit_bias_correction(
         target_data.loc[train_idx.union(val_idx)],
         neighbor_data.loc[train_idx.union(val_idx)]
@@ -604,7 +759,7 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
     results_list = []
 
     # ====================================================================
-    # Experiment 1: Continuous Missing Values
+    # Experiment 1: Continuous missing data
     # ====================================================================
     print("\n" + "=" * 80)
     print("🔴 Experiment 1: Continuous Missing Segments")
@@ -612,115 +767,92 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
 
     for missing_days in missing_days_list:
         print(f"\n{'─' * 80}")
-        print(f"Length of missing segment: {missing_days} Day")
+        print(f"Missing segment length: {missing_days} days")
         print(f"{'─' * 80}")
 
-        method_results = {
-            'lgbm_full': {'rmse': [], 'mae': [], 'corr': []},
-            'lgbm_no_spatial': {'rmse': [], 'mae': [], 'corr': []},
-            'time_only': {'rmse': [], 'mae': [], 'corr': []},
-            'linear': {'rmse': [], 'mae': [], 'corr': []}
-        }
+        # Initialize result storage
+        method_results = {key: {'rmse': [], 'mae': [], 'corr': []}
+                          for key in MODELS_CONFIG.keys()}
 
         for repeat in range(N_REPEATS):
-            print(f"\n  repeat {repeat + 1}/{N_REPEATS}")
+            print(f"\n  Repeat {repeat + 1}/{N_REPEATS}")
 
             seed = RANDOM_SEED + repeat
-            # Convert to global index
+
+            # Create missing data (only in Test set)
+            test_data = target_data.loc[test_idx].copy()
+            n_segments = max(1, int(len(test_idx) * 0.1 / missing_days))
+
+            masked_test, missing_indices_local, _ = create_continuous_missing(
+                test_data, n_segments, missing_days, seed=seed
+            )
+
             missing_indices_global = test_idx[missing_indices_local]
 
-            # Build a complete dataset (Train and Val have no missing values; Test has missing values)
+            # Build complete target data
             full_target = target_data.copy()
             full_target.loc[missing_indices_global] = np.nan
 
-            # === Feature construction ===
+            # Build complete feature matrix
             df_features = feature_engineer.create_features(
                 full_target, neighbor_data,
                 n_lags=7, rolling_windows=[3, 7, 14],
-                include_target_lags=True, use_neighbor_lag0=True
+                include_target_lags=True, use_neighbor_lag0=False
             )
 
-            # === Model1: Full LightGBM  ===
-            interpolator = LightGBMSpatialInterpolator(feature_engineer, LGBM_PARAMS)
-            interpolator.train_ensemble_residual(df_features, train_idx.union(val_idx))
-            pred_median, pred_lower, pred_upper = interpolator.predict_with_uncertainty_residual(
-                df_features, missing_indices_global
-            )
-            metrics_time = calculate_metrics(target_data, pred_time, missing_indices_global)
+            # Train and evaluate each model
+            for model_key, model_cfg in MODELS_CONFIG.items():
+                try:
+                    if model_key == 'linear':
+                        # Special handling: Linear interpolation
+                        pred = BaselineInterpolators.linear_interpolation(
+                            full_target, missing_indices_global
+                        )
+                    else:
+                        # Select features
+                        selected_features = feature_engineer.select_features_by_groups(
+                            df_features, model_cfg['groups']
+                        )
 
-            method_results['lgbm_full']['rmse'].append(metrics['rmse'])
-            method_results['lgbm_full']['mae'].append(metrics['mae'])
-            method_results['lgbm_full']['corr'].append(metrics['correlation'])
+                        # Prepare training data
+                        train_df = df_features.loc[train_idx.union(val_idx)].dropna(subset=['target'])
+                        X_train = train_df[selected_features].fillna(train_df[selected_features].mean())
+                        y_train = train_df['target']
 
+                        # Train model
+                        model = lgb.LGBMRegressor(**LGBM_PARAMS)
+                        model.fit(X_train, y_train)
 
-            # === Model 2: LightGBM  ===
-            # Remove spatial correlation features
-            df_no_spatial = df_features.drop(columns=[
-                                                         'neighbor_r', 'neighbor_dist_km', 'spatial_weight'
-                                                     ] + [c for c in df_features.columns if 'nbr_adj' in c],
-                                             errors='ignore')
+                        # Predict
+                        X_test = df_features.loc[missing_indices_global][selected_features]
+                        X_test = X_test.fillna(X_train.mean())
+                        pred = model.predict(X_test)
 
-            feature_engineer_nospatial = SpatialCorrelationFeatureEngineering(0, 0, 0)
-            interpolator_nospatial = LightGBMSpatialInterpolator(feature_engineer_nospatial, LGBM_PARAMS)
+                    # Calculate metrics
+                    metrics = calculate_metrics(target_data, pred, missing_indices_global)
 
-            # Manually prepare training data
-            train_df_ns = df_no_spatial.loc[train_idx.union(val_idx)].dropna(subset=['target'])
-            X_train_ns = train_df_ns.drop(columns=['target', 'neighbor'], errors='ignore').fillna(train_df_ns.mean())
-            y_train_ns = train_df_ns['target']
+                    method_results[model_key]['rmse'].append(metrics['rmse'])
+                    method_results[model_key]['mae'].append(metrics['mae'])
+                    method_results[model_key]['corr'].append(metrics['correlation'])
 
-            model_ns = lgb.LGBMRegressor(**LGBM_PARAMS)
-            model_ns.fit(X_train_ns, y_train_ns)
+                    print(f"    ✓ {model_cfg['name']}: RMSE={metrics['rmse']:.4f}")
 
-            X_test_ns = df_no_spatial.loc[missing_indices_global].drop(columns=['target', 'neighbor'],
-                                                                       errors='ignore').fillna(X_train_ns.mean())
-            pred_ns = model_ns.predict(X_test_ns)
+                except Exception as e:
+                    print(f"    ✗ {model_cfg['name']} failed: {e}")
+                    method_results[model_key]['rmse'].append(np.nan)
+                    method_results[model_key]['mae'].append(np.nan)
+                    method_results[model_key]['corr'].append(np.nan)
 
-            metrics_ns = calculate_metrics(
-                target_data, pred_ns, None, None, missing_indices_global
-            )
-
-            method_results['lgbm_no_spatial']['rmse'].append(metrics_ns['rmse'])
-            method_results['lgbm_no_spatial']['mae'].append(metrics_ns['mae'])
-            method_results['lgbm_no_spatial']['corr'].append(metrics_ns['correlation'])
-
-            # === Baseline: Time-only ===
-            pred_time = BaselineInterpolators.time_only_baseline(
-                df_features, train_idx.union(val_idx), missing_indices_global
-            )
-
-            metrics_time = calculate_metrics(
-                target_data, pred_time, None, None, missing_indices_global
-            )
-
-            method_results['time_only']['rmse'].append(metrics_time['rmse'])
-            method_results['time_only']['mae'].append(metrics_time['mae'])
-            method_results['time_only']['corr'].append(metrics_time['correlation'])
-
-            # === Baseline: Linear Interpolation ===
-            pred_linear = BaselineInterpolators.linear_interpolation(
-                target_data, missing_indices_global
-            )
-
-            metrics_linear = calculate_metrics_with_ci(
-                target_data, pred_linear, None, None, missing_indices_global
-            )
-
-            method_results['linear']['rmse'].append(metrics_linear['rmse'])
-            method_results['linear']['mae'].append(metrics_linear['mae'])
-            method_results['linear']['corr'].append(metrics_linear['correlation'])
-
-            print(f"    ✓ LGBM_NoSpatial: RMSE={metrics_ns['rmse']:.4f}")
-            print(f"    ✓ Time_Only: RMSE={metrics_time['rmse']:.4f}")
-            print(f"    ✓ Linear: RMSE={metrics_linear['rmse']:.4f}")
-
-        # Summary of Results
-        for method_name, method_data in method_results.items():
-            if len(method_data['rmse']) > 0:
+        # Summarize results
+        for model_key, model_cfg in MODELS_CONFIG.items():
+            method_data = method_results[model_key]
+            if len([x for x in method_data['rmse'] if not np.isnan(x)]) > 0:
                 results_list.append({
                     'experiment': 'continuous',
                     'station': TARGET_STATION,
                     'missing_days': missing_days,
-                    'method': method_name,
+                    'method': model_key,
+                    'method_description': model_cfg['description'],
                     'rmse_mean': np.nanmean(method_data['rmse']),
                     'rmse_std': np.nanstd(method_data['rmse']),
                     'mae_mean': np.nanmean(method_data['mae']),
@@ -730,135 +862,193 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
                     'n_repeats': N_REPEATS
                 })
 
-    # ====================================================================
-    # Experiment 2: Random Clustering Missing
-    # ====================================================================
-    print("\n" + "=" * 80)
-    print("🔵 Experiment 2: Random Clustering Missing")
-    print("=" * 80)
+# ====================================================================
+# Experiment 2: Random Missing Data
+# ====================================================================
+print("\n" + "=" * 80)
+print("🔴 Experiment 2: Random Missing Data")
+print("=" * 80)
 
-    for missing_ratio in missing_ratios:
-        print(f"\n{'─' * 80}")
-        print(f"Missing proportion: {missing_ratio * 100:.1f}%")
-        print(f"{'─' * 80}")
+for missing_ratio in missing_ratios:
+    print(f"\n{'─' * 80}")
+    print(f"Missing Ratio: {missing_ratio * 100:.1f}%")  # ✅ Fixed print content
+    print(f"{'─' * 80}")
 
-        method_results = {
-            'lgbm_full': {'rmse': [], 'mae': [], 'corr': []},
-            'lgbm_no_spatial': {'rmse': [], 'mae': [], 'corr': []},
-            'time_only': {'rmse': [], 'mae': [], 'corr': []},
-            'linear': {'rmse': [], 'mae': [], 'corr': []}
-        }
+    # Initialize result storage
+    # Initialize result storage
+    method_results = {key: {'rmse': [], 'mae': [], 'corr': []}
+                      for key in MODELS_CONFIG.keys()}  # ✅ Changed to MODELS_CONFIG
 
-        for repeat in range(N_REPEATS):
-            print(f"\n  repeat {repeat + 1}/{N_REPEATS}")
+    for repeat in range(N_REPEATS):
+        print(f"\n  Repeat {repeat + 1}/{N_REPEATS}")
 
-            seed = RANDOM_SEED + repeat
+        seed = RANDOM_SEED + repeat
 
-            # Create missing (in the Test section only)
-            test_data = target_data.loc[test_idx].copy()
+        # Create missing data (only in Test set)
+        test_data = target_data.loc[test_idx].copy()
+        # n_segments = max(1, int(len(test_idx) * 0.1 / missing_ratio))
 
-            masked_test, missing_indices_local = create_random_clustered_missing(
-                test_data, missing_ratio, min_segment=5, max_segment=30, seed=seed
-            )
+        # ✅ Fixed: Use create_random_clustered_missing
+        masked_test, missing_indices_local = create_random_clustered_missing(
+            test_data, missing_ratio, min_segment=5, max_segment=30, seed=seed
+        )
 
-            missing_indices_global = test_idx[missing_indices_local]
+        missing_indices_global = test_idx[missing_indices_local]
 
-            # Build a comprehensive dataset
-            full_target = target_data.copy()
-            full_target.loc[missing_indices_global] = np.nan
+        # Build complete data
+        full_target = target_data.copy()
+        full_target.loc[missing_indices_global] = np.nan
 
-            # Feature construction
-            df_features = feature_engineer.create_features(
-                full_target, neighbor_data,
-                n_lags=7, rolling_windows=[3, 7, 14],
-                include_target_lags=True, use_neighbor_lag0=True
-            )
+        # ✅ Fixed: lag0 should be enabled for random missing data
+        df_features = feature_engineer.create_features(
+            full_target, neighbor_data,
+            n_lags=7, rolling_windows=[3, 7, 14],
+            include_target_lags=True, use_neighbor_lag0=True  # ✅ Changed to True
+        )
 
-            # === Full Model ===
-            interpolator = LightGBMSpatialInterpolator(feature_engineer, LGBM_PARAMS)
+        # Train and evaluate each model
+        for model_key, model_cfg in MODELS_CONFIG.items():
+            try:
+                if model_key == 'linear':
+                    # Special handling: Linear interpolation
+                    pred = BaselineInterpolators.linear_interpolation(
+                        full_target, missing_indices_global
+                    )
+                else:
+                    # Select features
+                    selected_features = feature_engineer.select_features_by_groups(
+                        df_features, model_cfg['groups']
+                    )
 
-            method_results['lgbm_full']['rmse'].append(metrics['rmse'])
-            method_results['lgbm_full']['mae'].append(metrics['mae'])
-            method_results['lgbm_full']['corr'].append(metrics['correlation'])
-            method_results['lgbm_full']['ci_cov'].append(metrics['ci_coverage'])
+                    # Prepare training data
+                    train_df = df_features.loc[train_idx.union(val_idx)].dropna(subset=['target'])
+                    X_train = train_df[selected_features].fillna(train_df[selected_features].mean())
+                    y_train = train_df['target']
 
-            # === Non-spatial model  ===
-            df_no_spatial = df_features.drop(columns=[
-                                                         'neighbor_r', 'neighbor_dist_km', 'spatial_weight'
-                                                     ] + [c for c in df_features.columns if 'nbr_adj' in c],
-                                             errors='ignore')
+                    # Train model
+                    model = lgb.LGBMRegressor(**LGBM_PARAMS)
+                    model.fit(X_train, y_train)
 
-            train_df_ns = df_no_spatial.loc[train_idx.union(val_idx)].dropna(subset=['target'])
-            X_train_ns = train_df_ns.drop(columns=['target', 'neighbor'], errors='ignore').fillna(train_df_ns.mean())
-            y_train_ns = train_df_ns['target']
+                    # Predict
+                    X_test = df_features.loc[missing_indices_global][selected_features]
+                    X_test = X_test.fillna(X_train.mean())
+                    pred = model.predict(X_test)
 
-            model_ns = lgb.LGBMRegressor(**LGBM_PARAMS)
-            model_ns.fit(X_train_ns, y_train_ns)
+                # Calculate metrics
+                metrics = calculate_metrics(target_data, pred, missing_indices_global)
 
-            X_test_ns = df_no_spatial.loc[missing_indices_global].drop(columns=['target', 'neighbor'],
-                                                                       errors='ignore').fillna(X_train_ns.mean())
-            pred_ns = model_ns.predict(X_test_ns)
+                method_results[model_key]['rmse'].append(metrics['rmse'])
+                method_results[model_key]['mae'].append(metrics['mae'])
+                method_results[model_key]['corr'].append(metrics['correlation'])
 
-            metrics_ns = calculate_metrics_with_ci(
-                target_data, pred_ns, None, None, missing_indices_global
-            )
+                print(f"    ✓ {model_cfg['name']}: RMSE={metrics['rmse']:.4f}")
 
-            method_results['lgbm_no_spatial']['rmse'].append(metrics_ns['rmse'])
-            method_results['lgbm_no_spatial']['mae'].append(metrics_ns['mae'])
-            method_results['lgbm_no_spatial']['corr'].append(metrics_ns['correlation'])
+            except Exception as e:
+                print(f"    ✗ {model_cfg['name']} failed: {e}")
+                method_results[model_key]['rmse'].append(np.nan)
+                method_results[model_key]['mae'].append(np.nan)
+                method_results[model_key]['corr'].append(np.nan)
 
-            # === Baseline ===
-            pred_time = BaselineInterpolators.time_only_baseline(
-                df_features, train_idx.union(val_idx), missing_indices_global
-            )
-            metrics_time = calculate_metrics_with_ci(
-                target_data, pred_time, None, None, missing_indices_global
-            )
-            method_results['time_only']['rmse'].append(metrics_time['rmse'])
-            method_results['time_only']['mae'].append(metrics_time['mae'])
-            method_results['time_only']['corr'].append(metrics_time['correlation'])
+# Summarize results
+for model_key, model_cfg in MODELS_CONFIG.items():
+    method_data = method_results[model_key]
+    if len([x for x in method_data['rmse'] if not np.isnan(x)]) > 0:
+        results_list.append({
+            'experiment': 'random',
+            'station': TARGET_STATION,
+            'missing_ratio': missing_ratio * 100,  # ✅ Convert to percentage
+            'method': model_key,
+            'method_description': model_cfg['description'],
+            'rmse_mean': np.nanmean(method_data['rmse']),
+            'rmse_std': np.nanstd(method_data['rmse']),
+            'mae_mean': np.nanmean(method_data['mae']),
+            'mae_std': np.nanstd(method_data['mae']),
+            'correlation_mean': np.nanmean(method_data['corr']),
+            'correlation_std': np.nanstd(method_data['corr']),
+            'n_repeats': N_REPEATS
+        })
 
-            method_results['linear']['rmse'].append(metrics_linear['rmse'])
-            method_results['linear']['mae'].append(metrics_linear['mae'])
-            method_results['linear']['corr'].append(metrics_linear['correlation'])
+# Save results
+results_df = pd.DataFrame(results_list)
+results_path = os.path.join(output_folder, 'lgbm_spatial_results.csv')
+results_df.to_csv(results_path, index=False, encoding='utf-8-sig')
+print(f"\n✓ Results saved to: {results_path}")
+# ========== New: Feature Group Contribution Analysis ==========
+print("\n" + "=" * 80)
+print("📊 Feature Group Incremental Contribution Analysis")
+print("=" * 80)
 
-            print(f"    ✓ LGBM_Full: RMSE={metrics['rmse']:.4f}, CI_cov={metrics['ci_coverage']:.3f}")
+def analyze_incremental_contribution(results_df, experiment_type='continuous'):
+    """Analyze incremental contribution of each feature group"""
+    exp_data = results_df[results_df['experiment'] == experiment_type]
 
-       
-        for method_name, method_data in method_results.items():
-            if len(method_data['rmse']) > 0:
-                results_list.append({
-                    'experiment': 'random',
-                    'station': TARGET_STATION,
-                    'missing_ratio': missing_ratio * 100,
-                    'method': method_name,
-                    'rmse_mean': np.nanmean(method_data['rmse']),
-                    'rmse_std': np.nanstd(method_data['rmse']),
-                    'mae_mean': np.nanmean(method_data['mae']),
-                    'mae_std': np.nanstd(method_data['mae']),
-                    'correlation_mean': np.nanmean(method_data['corr']),
-                    'correlation_std': np.nanstd(method_data['corr']),
-                    'ci_coverage_mean': np.nanmean(method_data.get('ci_cov', [np.nan])),
-                    'n_repeats': N_REPEATS
-                })
+    # Calculate average RMSE grouped by model
+    model_order = [
+        'baseline_time',
+        'baseline_history',
+        'ablation_basic_neighbor',
+        'ablation_with_meta',
+        'ablation_with_dynamic',
+        'full_model'
+    ]
 
-    # Save result
-    results_df = pd.DataFrame(results_list)
-    results_path = os.path.join(output_folder, 'lgbm_spatial_results.csv')
-    results_df.to_csv(results_path, index=False, encoding='utf-8-sig')
-    print(f"\n✓ The results have been saved: {results_path}")
+    avg_rmse = {}
+    for model in model_order:
+        model_data = exp_data[exp_data['method'] == model]
+        if len(model_data) > 0:
+            avg_rmse[model] = model_data['rmse_mean'].mean()
 
-    return results_df, interpolator
+    # Calculate incremental improvement
+    print(f"\nFeature Group Incremental Contribution for {experiment_type.upper()} Experiment:\n")
+    print(f"{'Stage':<30} {'Avg RMSE':<12} {'Rel Improvement':<12} {'Abs Improvement':<12}")
+    print("─" * 70)
+
+    baseline_rmse = avg_rmse.get('baseline_time', np.nan)
+    prev_rmse = baseline_rmse
+
+    for i, model in enumerate(model_order):
+        if model in avg_rmse:
+            current_rmse = avg_rmse[model]
+
+            # Improvement compared to previous stage
+            if i == 0:
+                rel_improve = 0.0
+                abs_improve = 0.0
+            else:
+                rel_improve = (prev_rmse - current_rmse) / prev_rmse * 100
+                abs_improve = prev_rmse - current_rmse
+
+            model_name = MODELS_CONFIG[model]['description']  # ✅ Changed to MODELS_CONFIG
+            print(f"{model_name:<30} {current_rmse:>10.4f}  {rel_improve:>10.2f}%  {abs_improve:>10.4f}")
+
+            prev_rmse = current_rmse
+
+    # Key contribution percentages
+    if 'baseline_history' in avg_rmse and 'ablation_basic_neighbor' in avg_rmse:
+        spatial_contrib = (avg_rmse['baseline_history'] - avg_rmse['ablation_basic_neighbor']) / \
+                          (avg_rmse['baseline_time'] - avg_rmse['full_model']) * 100
+        print(f"\n🎯 Contribution of core spatial information (basic neighbor features): {spatial_contrib:.1f}% of total improvement")
+
+    if 'ablation_basic_neighbor' in avg_rmse and 'full_model' in avg_rmse:
+        advanced_contrib = (avg_rmse['ablation_basic_neighbor'] - avg_rmse['full_model']) / \
+                           (avg_rmse['baseline_time'] - avg_rmse['full_model']) * 100
+        print(f"🎯 Contribution of advanced spatial features (meta + dynamic + Bias): {advanced_contrib:.1f}% of total improvement")
+
+# Analyze both experiments
+analyze_incremental_contribution(results_df, 'continuous')
+analyze_incremental_contribution(results_df, 'random')
+
+return results_df, None  # Changed second return value to None (no single final_interpolator)
 
 
 def plot_feature_importance(interpolator, output_folder):
-    """Plotting Feature Importance"""
+    """Plot feature importance"""
     importance_df = interpolator.get_feature_importance(top_n=20)
 
     if importance_df is None:
         return
 
-    plt.figure(figsize=(10, 8))
+    plt.figure(figsize=(8, 6))
     plt.barh(range(len(importance_df)), importance_df['importance'].values)
     plt.yticks(range(len(importance_df)), importance_df['feature'].values)
     plt.xlabel('Feature Importance', fontsize=13)
@@ -868,14 +1058,24 @@ def plot_feature_importance(interpolator, output_folder):
 
     save_path = os.path.join(output_folder, 'feature_importance.png')
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"✓ The feature importance plot has been saved: {save_path}")
+    print(f"✓ Feature importance plot saved to: {save_path}")
     plt.close()
 
 
 def plot_comparison_results(results_df, output_folder):
-    """Comparison Chart of Drawing Methods"""
+    """Plot method comparison results"""
+    # Define model display order and colors
+    model_display_order = [
+        ('baseline_time', 'Time Only', 'lightcoral'),
+        ('baseline_history', '+ History', 'orange'),
+        ('ablation_basic_neighbor', '+ Neighbor', 'gold'),
+        ('ablation_with_meta', '+ Spatial Meta', 'lightgreen'),
+        ('ablation_with_dynamic', '+ Dynamic', 'skyblue'),
+        ('full_model', 'Full Model', 'steelblue'),
+        ('linear', 'Linear Interp.', 'gray')
+    ]
 
-    # Figure 1: Comparison of Continuous Missing Data and RMSE
+    # Figure 1: Continuous Missing - RMSE Comparison
     continuous_df = results_df[results_df['experiment'] == 'continuous']
 
     if len(continuous_df) > 0:
@@ -886,13 +1086,18 @@ def plot_comparison_results(results_df, output_folder):
             values='rmse_mean', index='missing_days', columns='method'
         )
 
+        # ✅ Correct
         ax = axes[0]
-        for method in pivot_rmse.columns:
-            ax.plot(pivot_rmse.index, pivot_rmse[method], marker='o', label=method, linewidth=2)
+        for model_key, display_name, color in model_display_order:
+            if model_key in pivot_rmse.columns:
+                model_data = pivot_rmse[model_key]
+                ax.plot(pivot_rmse.index, model_data,
+                        marker='o', label=display_name,
+                        linewidth=2.5, color=color, alpha=0.8)
 
         ax.set_xlabel('Missing Days', fontsize=12)
-        ax.set_ylabel('RMSE (mm)', fontsize=12)
-        ax.set_title('Continuous Missing - RMSE', fontsize=14, fontweight='bold')
+        ax.set_ylabel('RMSE(mm)', fontsize=12)
+        ax.set_title('Continuous Missing(RMSE)', fontsize=14, fontweight='bold')
         ax.legend()
         ax.grid(True, alpha=0.3)
 
@@ -902,22 +1107,26 @@ def plot_comparison_results(results_df, output_folder):
         )
 
         ax = axes[1]
-        for method in pivot_mae.columns:
-            ax.plot(pivot_mae.index, pivot_mae[method], marker='s', label=method, linewidth=2)
+        for model_key, display_name, color in model_display_order:
+            if model_key in pivot_mae.columns:
+                model_data = pivot_mae[model_key]
+                ax.plot(pivot_mae.index, model_data,
+                        marker='s', label=display_name,
+                        linewidth=2.5, color=color, alpha=0.8)
 
         ax.set_xlabel('Missing Days', fontsize=12)
-        ax.set_ylabel('MAE (mm)', fontsize=12)
-        ax.set_title('Continuous Missing - MAE', fontsize=14, fontweight='bold')
+        ax.set_ylabel('MAE(mm)', fontsize=12)
+        ax.set_title('Continuous Missing(MAE)', fontsize=14, fontweight='bold')
         ax.legend()
         ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
         save_path = os.path.join(output_folder, 'continuous_comparison.png')
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ The comparison chart of consecutive missing values has been saved: {save_path}")
+        print(f"✓ Continuous missing comparison plot saved to: {save_path}")
         plt.close()
 
-    # Figure 2: Comparison of Random Missing Data and RMSE
+    # Figure 2: Random Missing - RMSE Comparison
     random_df = results_df[results_df['experiment'] == 'random']
 
     if len(random_df) > 0:
@@ -928,12 +1137,16 @@ def plot_comparison_results(results_df, output_folder):
         )
 
         ax = axes[0]
-        for method in pivot_rmse.columns:
-            ax.plot(pivot_rmse.index, pivot_rmse[method], marker='o', label=method, linewidth=2)
+        for model_key, display_name, color in model_display_order:
+            if model_key in pivot_rmse.columns:
+                model_data = pivot_rmse[model_key]
+                ax.plot(pivot_rmse.index, model_data,
+                        marker='o', label=display_name,
+                        linewidth=2.5, color=color, alpha=0.8)
 
-        ax.set_xlabel('Missing Ratio (%)', fontsize=12)
-        ax.set_ylabel('RMSE (mm)', fontsize=12)
-        ax.set_title('Random Missing - RMSE', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Missing Ratio(%)', fontsize=12)
+        ax.set_ylabel('RMSE(mm)', fontsize=12)
+        ax.set_title('Random Missing(RMSE)', fontsize=14, fontweight='bold')
         ax.legend()
         ax.grid(True, alpha=0.3)
 
@@ -942,84 +1155,356 @@ def plot_comparison_results(results_df, output_folder):
         )
 
         ax = axes[1]
-        for method in pivot_mae.columns:
-            ax.plot(pivot_mae.index, pivot_mae[method], marker='s', label=method, linewidth=2)
+        for model_key, display_name, color in model_display_order:
+            if model_key in pivot_mae.columns:
+                model_data = pivot_mae[model_key]
+                ax.plot(pivot_mae.index, model_data,
+                        marker='s', label=display_name,
+                        linewidth=2.5, color=color, alpha=0.8)
 
-        ax.set_xlabel('Missing Ratio (%)', fontsize=12)
-        ax.set_ylabel('MAE (mm)', fontsize=12)
-        ax.set_title('Random Missing - MAE', fontsize=14, fontweight='bold')
+        ax.set_xlabel('Missing Ratio(%)', fontsize=12)
+        ax.set_ylabel('MAE(mm)', fontsize=12)
+        ax.set_title('Random Missing(MAE)', fontsize=14, fontweight='bold')
         ax.legend()
         ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
         save_path = os.path.join(output_folder, 'random_comparison.png')
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ The comparison chart for missing at random has been saved: {save_path}")
+        print(f"✓ Random missing comparison plot saved to: {save_path}")
         plt.close()
 
 
-def generate_summary_report(results_df, output_folder):
-    """Generate a summary report"""
+# =====================================================================
+# SHAP Visualization Functions (added after plot_comparison_results)
+# =====================================================================
+
+def plot_shap_summary(interpolator, output_folder, top_n=20):
+    """
+    Plot SHAP summary plots
+
+    Parameters:
+        interpolator: Trained interpolator (contains SHAP values)
+        output_folder: Output folder path
+        top_n: Show top N features
+    """
+    if interpolator.shap_values is None or interpolator.X_sample_for_shap is None:
+        print("    [Warning] SHAP values not found, skipping plotting")
+        return
+
+    X_sample = interpolator.X_sample_for_shap
+    shap_values = interpolator.shap_values
+
+    # Figure 1: Feature importance bar chart
+    try:
+        plt.figure(figsize=(10, 8))
+        shap.summary_plot(shap_values, X_sample, plot_type="bar",
+                          max_display=top_n, show=False)
+        plt.title('SHAP Feature Importance (Global)', fontsize=15, fontweight='bold')
+        plt.tight_layout()
+
+        save_path = os.path.join(output_folder, 'shap_importance_bar.png')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"    ✓ SHAP bar plot saved to: {save_path}")
+        plt.close()
+    except Exception as e:
+        print(f"    [Warning] Failed to plot SHAP bar chart: {e}")
+        plt.close()
+
+    # Figure 2: Beeswarm plot (show feature distribution and impact direction)
+    try:
+        plt.figure(figsize=(10, 8))
+        shap.summary_plot(shap_values, X_sample, max_display=top_n, show=False)
+        plt.title('SHAP Feature Distribution', fontsize=15, fontweight='bold')
+        plt.tight_layout()
+
+        save_path = os.path.join(output_folder, 'shap_summary_beeswarm.png')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"    ✓ SHAP beeswarm plot saved to: {save_path}")
+        plt.close()
+    except Exception as e:
+        print(f"    [Warning] Failed to plot SHAP beeswarm plot: {e}")
+        plt.close()
+
+def plot_shap_dependence(interpolator, feature_name, output_folder):
+    """
+    Plot SHAP dependence plot (detailed analysis of a single feature)
+
+    Parameters:
+        interpolator: Trained interpolator
+        feature_name: Name of the feature to analyze
+        output_folder: Output folder path
+    """
+    if interpolator.shap_values is None or interpolator.X_sample_for_shap is None:
+        return
+
+    X_sample = interpolator.X_sample_for_shap
+    shap_values = interpolator.shap_values
+
+    try:
+        plt.figure(figsize=(10, 6))
+        shap.dependence_plot(
+            feature_name, shap_values, X_sample,
+            interaction_index="auto",
+            show=False
+        )
+        plt.title(f'SHAP Dependence: {feature_name}', fontsize=15, fontweight='bold')
+        plt.tight_layout()
+
+        safe_filename = feature_name.replace('/', '_').replace('\\', '_')
+        save_path = os.path.join(output_folder, f'shap_dependence_{safe_filename}.png')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"    ✓ SHAP dependence plot saved: {save_path}")
+        plt.close()
+    except Exception as e:
+        print(f"    [Warning] Failed to plot SHAP dependence ({feature_name}): {e}")
+        plt.close()
+
+
+def plot_feature_importance_comparison(interpolator, output_folder):
+    """
+    Compare feature importance between LightGBM and SHAP
+
+    Parameters:
+        interpolator: Trained interpolator (SHAP must be computed first)
+        output_folder: Output folder path
+    """
+    if interpolator.shap_values is None:
+        print("    [Warning] SHAP values not computed, skipping comparison plot")
+        return None
+
+    try:
+        comparison_df = interpolator.compare_feature_importance_methods()
+
+        top_features = comparison_df.head(15)
+
+        fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+
+        ax = axes[0]
+        x = np.arange(len(top_features))
+        width = 0.35
+
+        ax.barh(x - width / 2, top_features['lgbm_norm'], width,
+                label='LightGBM', alpha=0.8, color='steelblue')
+        ax.barh(x + width / 2, top_features['shap_norm'], width,
+                label='SHAP', alpha=0.8, color='coral')
+
+        ax.set_yticks(x)
+        ax.set_yticklabels(top_features['feature'])
+        ax.set_xlabel('Normalized Importance', fontsize=12)
+        ax.set_title('Feature Importance Comparison', fontsize=14, fontweight='bold')
+        ax.legend()
+        ax.invert_yaxis()
+        ax.grid(axis='x', alpha=0.3)
+
+        ax = axes[1]
+        colors = ['green' if d <= 3 else 'orange' if d <= 5 else 'red'
+                  for d in top_features['rank_diff']]
+
+        ax.barh(range(len(top_features)), top_features['rank_diff'], color=colors, alpha=0.7)
+        ax.set_yticks(range(len(top_features)))
+        ax.set_yticklabels(top_features['feature'])
+        ax.set_xlabel('Rank Difference', fontsize=12)
+        ax.set_title('Ranking Inconsistency', fontsize=14, fontweight='bold')
+        ax.invert_yaxis()
+        ax.grid(axis='x', alpha=0.3)
+
+        plt.tight_layout()
+        save_path = os.path.join(output_folder, 'importance_comparison.png')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"    ✓ Feature importance comparison plot saved: {save_path}")
+        plt.close()
+
+        return comparison_df
+
+    except Exception as e:
+        print(f"    [Warning] Failed to plot feature importance comparison: {e}")
+        plt.close()
+        return None
+
+
+def analyze_spatial_feature_contribution_with_shap(interpolator, output_folder):
+    """
+    Analyze spatial feature contribution using SHAP
+
+    Parameters:
+        interpolator: Trained interpolator (SHAP must be computed first)
+        output_folder: Output folder path
+
+    Returns:
+        spatial_contribution_pct: Percentage of spatial feature contribution
+    """
+    if interpolator.shap_values is None:
+        print("    [Warning] SHAP values not computed, skipping spatial feature analysis")
+        return 0.0
+
+    shap_values = interpolator.shap_values
+
+    spatial_keywords = ['neighbor_r', 'neighbor_dist', 'spatial_weight',
+                        'nbr_adj', 'nbr_lag', 'nbr_roll', 'nbr_isnan',
+                        'spatial_corr', 'nbr_tgt_diff', 'nbr_consecutive']
+
+    spatial_features = [f for f in interpolator.feature_names if any(
+        keyword in f for keyword in spatial_keywords
+    )]
+
+    if len(spatial_features) == 0:
+        print("    [Warning] No spatial features found")
+        return 0.0
+
+    spatial_indices = [interpolator.feature_names.index(f) for f in spatial_features]
+    spatial_shap = np.abs(shap_values[:, spatial_indices]).sum(axis=1).mean()
+
+    total_shap = np.abs(shap_values).sum(axis=1).mean()
+    spatial_contribution_pct = (spatial_shap / total_shap) * 100
+
+    print("\n" + "=" * 60)
+    print("🎯 SHAP Spatial Feature Contribution Analysis")
+    print("=" * 60)
+    print(f"Total spatial features: {len(spatial_features)}")
+    print(f"Spatial feature contribution: {spatial_contribution_pct:.2f}%")
+    print(f"Other feature contribution: {100 - spatial_contribution_pct:.2f}%")
+    print("\nTop 5 spatial features:")
+
+    spatial_importance = pd.DataFrame({
+        'feature': spatial_features,
+        'shap_importance': [np.abs(shap_values[:, interpolator.feature_names.index(f)]).mean()
+                            for f in spatial_features]
+    }).sort_values('shap_importance', ascending=False)
+
+    print(spatial_importance.head(5).to_string(index=False))
+
+    save_path = os.path.join(output_folder, 'spatial_features_shap_analysis.csv')
+    spatial_importance.to_csv(save_path, index=False, encoding='utf-8-sig')
+    print(f"\n✓ Detailed results saved: {save_path}")
+
+    return spatial_contribution_pct
+
+
+def run_shap_analysis_pipeline(interpolator, df_features, train_idx, output_folder):
+    """
+    Complete SHAP analysis pipeline
+
+    Parameters:
+        interpolator: Trained interpolator
+        df_features: Complete feature DataFrame
+        train_idx: Training set indices
+        output_folder: Output folder
+
+    Returns:
+        shap_results: Dictionary containing all SHAP analysis results
+    """
     print("\n" + "=" * 80)
-    print("📊 Generate a summary report")
+    print("🔍 Starting SHAP Feature Contribution Analysis")
     print("=" * 80)
 
-    # 1. Overall Performance
+    X_train = df_features.loc[train_idx].drop(columns=['target', 'neighbor'], errors='ignore')
+    X_train = X_train.fillna(X_train.mean())
+
+    print("\nComputing SHAP values...")
+    shap_values, X_sample = interpolator.compute_shap_values(X_train, max_samples=1000)
+
+    if shap_values is None:
+        print("    [Error] SHAP computation failed, skipping subsequent analysis")
+        return None
+
+    shap_results = {}
+
+    print("\nGenerating SHAP visualization plots...")
+    plot_shap_summary(interpolator, output_folder, top_n=20)
+
+    comparison_df = plot_feature_importance_comparison(interpolator, output_folder)
+    if comparison_df is not None:
+        save_path = os.path.join(output_folder, 'importance_comparison.csv')
+        comparison_df.to_csv(save_path, index=False, encoding='utf-8-sig')
+        print(f"    ✓ Comparison results saved: {save_path}")
+        shap_results['comparison'] = comparison_df
+
+    spatial_contrib = analyze_spatial_feature_contribution_with_shap(
+        interpolator, output_folder
+    )
+    shap_results['spatial_contribution_pct'] = spatial_contrib
+
+    print("\nGenerating key feature dependence plots...")
+    shap_importance_df = interpolator.get_shap_feature_importance(top_n=5)
+    for i, feature in enumerate(shap_importance_df['feature'].head(3)):
+        print(f"  [{i + 1}/3] Plotting feature: {feature}")
+        plot_shap_dependence(interpolator, feature, output_folder)
+
+    shap_results['top_features'] = shap_importance_df
+
+    print("\n" + "=" * 80)
+    print("✅ SHAP analysis completed!")
+    print("=" * 80)
+    print(f"Total spatial feature contribution: {spatial_contrib:.2f}%")
+
+    return shap_results
+
+
+def generate_summary_report(results_df, output_folder):
+    """Generate summary report"""
+    print("\n" + "=" * 80)
+    print("📊 Generating summary report")
+    print("=" * 80)
+
     summary_overall = results_df.groupby('method').agg({
         'rmse_mean': 'mean',
         'mae_mean': 'mean',
         'correlation_mean': 'mean',
-        'ci_coverage_mean': 'mean'
-    }).round(4)
+    }).round(3)
 
-    print("\nOverall Average Performance:")
+    print("\nOverall average performance:")
     print(summary_overall)
 
     overall_path = os.path.join(output_folder, 'summary_overall.csv')
     summary_overall.to_csv(overall_path, encoding='utf-8-sig')
 
-    # 2. Summary by Experiment Type
     summary_by_exp = results_df.groupby(['experiment', 'method']).agg({
         'rmse_mean': ['mean', 'std'],
         'mae_mean': ['mean', 'std'],
         'correlation_mean': ['mean', 'std']
     }).round(4)
 
-    print("\nSummary by Experiment Type:")
+    print("\nSummary by experiment type:")
     print(summary_by_exp)
 
     exp_path = os.path.join(output_folder, 'summary_by_experiment.csv')
     summary_by_exp.to_csv(exp_path, encoding='utf-8-sig')
 
-    
-    # 3. Percentage improvement
+    print("\n" + "=" * 80)
+    print("🏆 Method ranking (based on average RMSE)")
+    print("=" * 80)
+
+    ranking = results_df.groupby('method')['rmse_mean'].mean().sort_values()
+    for rank, (method, rmse) in enumerate(ranking.items(), 1):
+        print(f"  {rank}. {method:20s} - RMSE: {rmse:.4f} mm")
+
     if 'lgbm_full' in ranking.index and 'linear' in ranking.index:
         improvement = (ranking['linear'] - ranking['lgbm_full']) / ranking['linear'] * 100
-        print(f"\n✨ LGBM_Full Compared to Linear Improvements: {improvement:.2f}%")
+        print(f"\n✨ LGBM_Full improvement over Linear: {improvement:.2f}%")
 
     if 'lgbm_full' in ranking.index and 'lgbm_no_spatial' in ranking.index:
         spatial_benefit = (ranking['lgbm_no_spatial'] - ranking['lgbm_full']) / ranking['lgbm_no_spatial'] * 100
-        print(f"✨ Contribution of spatial characteristics: {spatial_benefit:.2f}%")
+        print(f"✨ Spatial feature contribution: {spatial_benefit:.2f}%")
 
 
 # =====================================================================
-# 主程序
+# Main Program
 # =====================================================================
 if __name__ == "__main__":
-    print(“\n” + “=” * 80)
-    print(“LightGBM + Spatial Correlation Fusion Interpolation System”)
-    print(“=” * 80)
-    print(f“Configuration Information:”)
-    print(f“  - Target Station: {TARGET_STATION}”)
-    print(f“  - Neighboring Station: {NEIGHBOR_STATION}”)
-    print(f“  - Spatial Correlation: r = {CORRELATION_R:.4f}”)
-    print(f“  - Station Distance: {NEIGHBOR_DIST_KM:.2f} km”)
-    print(f“  - Analysis period: {START_DATE} to {END_DATE}”)
-    print(f“  - Number of repetitions: {N_REPEATS}”)
-    print(“=” * 80)
+    print("\n" + "=" * 80)
+    print("LightGBM + Spatial Correlation Fusion Interpolation System")
+    print("=" * 80)
+    print(f"Configuration Info:")
+    print(f"  - Target Station: {TARGET_STATION}")
+    print(f"  - Neighbor Station: {NEIGHBOR_STATION}")
+    print(f"  - Spatial Correlation: r = {CORRELATION_R:.4f}")
+    print(f"  - Station Distance: {NEIGHBOR_DIST_KM:.2f} km")
+    print(f"  - Analysis Period: {START_DATE} to {END_DATE}")
+    print(f"  - Experiment Repeats: {N_REPEATS}")
+    print("=" * 80)
 
-    # 1. Load data
-    print(“\nLoading data...”)
+    print("\nLoading data...")
     try:
         df_target = pd.read_csv(
             os.path.join(FOLDER, f"{TARGET_STATION}.csv"),
@@ -1030,65 +1515,31 @@ if __name__ == "__main__":
             parse_dates=[TIME_COL]
         )
 
-        # Process data
         df_target = df_target.set_index(TIME_COL).sort_index()
         df_neighbor = df_neighbor.set_index(TIME_COL).sort_index()
 
-        # Extract data for a specified time period
         start_dt = pd.to_datetime(START_DATE)
         end_dt = pd.to_datetime(END_DATE)
 
         target_data = df_target.loc[start_dt:end_dt, VALUE_COL]
         neighbor_data = df_neighbor.loc[start_dt:end_dt, VALUE_COL]
 
-        # Reindexing ensures continuity
         full_date_range = pd.date_range(start=start_dt, end=end_dt, freq='D')
         target_data = target_data.reindex(full_date_range)
         neighbor_data = neighbor_data.reindex(full_date_range)
 
         print(f"✓ Data loaded successfully")
-        print(f"  - target station: {len(target_data)} days, missing {target_data.isna().sum()} days")
-        print(f"  - neighbor station: {len(neighbor_data)} days, missing {neighbor_data.isna().sum()} 天")
+        print(f"  - Target station: {len(target_data)} days, missing {target_data.isna().sum()} days")
+        print(f"  - Neighbor station: {len(neighbor_data)} days, missing {neighbor_data.isna().sum()} days")
 
     except Exception as e:
         print(f"[Error] Data loading failed: {e}")
         exit(1)
 
-    # 2. Create an output folder
     output_folder = os.path.join(FOLDER, "lgbm_spatial_results")
     os.makedirs(output_folder, exist_ok=True)
     print(f"\n✓ Output folder: {output_folder}")
-    # ===================================================================
-    # 🔥 Hyperparameter Optimization
-    # ===================================================================
-    ENABLE_HYPERPARAMETER_OPTIMIZATION = True  
 
-    if ENABLE_HYPERPARAMETER_OPTIMIZATION:
-        print("\n" + "=" * 80)
-        print("⚙️ Start hyperparameter optimization")
-        print("=" * 80)
-
-        best_params = optimize_lgbm_hyperparameters(
-            target_data, neighbor_data, output_folder,
-            n_trials=100  
-        )
-
-        # Update global parameters
-        LGBM_PARAMS.update(best_params)
-
-        # Save optimal parameters
-        best_params_path = os.path.join(output_folder, 'best_hyperparameters.json')
-        with open(best_params_path, 'w', encoding='utf-8') as f:
-            json.dump(best_params, f, indent=4, ensure_ascii=False)
-
-         print(f“\n✓ Optimal hyperparameters saved: {best_params_path}”)
-        print(“\n💡 Tip: For subsequent runs, set ENABLE_HYPERPARAMETER_OPTIMIZATION to False”)
-        print(“         and manually update the LGBM_PARAMS dictionary to save time”)
-    else:
-        print("\n⏭️ Skip hyperparameter tuning and use preset parameters")
-
-    # ===================================================================
-    # 3. Determine the experimental parameters
     sample_length = len(target_data)
 
     if sample_length > 1000:
@@ -1100,29 +1551,24 @@ if __name__ == "__main__":
 
     missing_ratios = np.arange(0.05, 0.55, 0.05)
 
-    print(f“\nExperiment configuration:”)
-    print(f“  - Number of consecutive missing days: {missing_days_list}”)
-    print(f“  - Random missing rates: {[f'{r * 100:.0f}%' for r in missing_ratios]}”)
+    print(f"\nExperiment Configuration:")
+    print(f"  - Continuous missing days: {missing_days_list}")
+    print(f"  - Random missing ratios: {[f'{r * 100:.0f}%' for r in missing_ratios]}")
 
-    # 4. Conduct the experiment
-    results_df, final_interpolator = run_spatial_lgbm_experiments(
+    results_df,_ = run_spatial_lgbm_experiments(
         target_data, neighbor_data,
         missing_days_list, missing_ratios,
         output_folder
     )
 
-    # 5. 生成可视化
     print("\n" + "=" * 80)
-    print("Generate visualizations...")
+    print("Generating visualization plots...")
     print("=" * 80)
 
-    plot_feature_importance(final_interpolator, output_folder)
     plot_comparison_results(results_df, output_folder)
 
-    # 6. Generate a summary report
     generate_summary_report(results_df, output_folder)
 
-    # 7. Save configuration settings
     config_info = {
         'target_station': TARGET_STATION,
         'neighbor_station': NEIGHBOR_STATION,
@@ -1132,26 +1578,65 @@ if __name__ == "__main__":
         'time_range': f"{START_DATE} to {END_DATE}",
         'data_length': sample_length,
         'n_repeats': N_REPEATS,
-        'n_bootstrap': N_BOOTSTRAP,
         'lgbm_params': LGBM_PARAMS,
         'missing_days_list': missing_days_list,
         'missing_ratios': missing_ratios.tolist(),
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
 
+    print("\n" + "=" * 80)
+    print("🔬 Performing SHAP feature contribution analysis...")
+    print("=" * 80)
+
+    try:
+        total_length = len(target_data)
+        train_end = int(0.6 * total_length)
+        val_end = int(0.8 * total_length)
+
+        train_idx = target_data.index[:train_end]
+        val_idx = target_data.index[train_end:val_end]
+        train_val_idx = target_data.index[:val_end]
+
+        feature_engineer_for_shap = SpatialCorrelationFeatureEngineering(
+            correlation_r=CORRELATION_R,
+            neighbor_dist_km=NEIGHBOR_DIST_KM,
+            bias_value=BIAS_VALUE
+        )
+
+        train_val_idx = target_data.index[:val_end]
+        feature_engineer_for_shap.fit_bias_correction(
+            target_data.loc[train_val_idx],
+            neighbor_data.loc[train_val_idx]
+        )
+
+        df_features_for_shap = feature_engineer_for_shap.create_features(
+            target_data, neighbor_data,
+            n_lags=7, rolling_windows=[3, 7, 14],
+            include_target_lags=True, use_neighbor_lag0=True
+        )
+
+        print("    Training full model for SHAP analysis...")
+        shap_interpolator = LightGBMSpatialInterpolator(feature_engineer_for_shap, LGBM_PARAMS)
+        shap_interpolator.train(df_features_for_shap, train_val_idx)
+
+        shap_results = run_shap_analysis_pipeline(
+            shap_interpolator,
+            df_features_for_shap,
+            train_val_idx,
+            output_folder
+        )
+
+        if shap_results is not None:
+            config_info['shap_analysis'] = {
+                'spatial_contribution_pct': shap_results.get('spatial_contribution_pct', 0.0),
+                'top_5_features': shap_results['top_features'].head(5)[
+                    'feature'].tolist() if 'top_features' in shap_results else []
+            }
+
+    except Exception as e:
+        print(f"\n[Warning] SHAP analysis failed: {e}")
+        print("Continuing with subsequent processes...")
+
     config_path = os.path.join(output_folder, 'experiment_config.json')
     with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(config_info, f, indent=4, ensure_ascii=False)
-
-    print("\n" + "=" * 80)
-    print(“✅ Experiment complete!”)
-    print(“=” * 80)
-    print(f“All results have been saved to: {output_folder}”)
-    print(f“  - Detailed results: lgbm_spatial_results.csv”)
-    print(f“  - Overall summary: summary_overall.csv”)
-    print(f“  - Experiment summary: summary_by_experiment.csv”)
-    print(f“  - Feature importance plot: feature_importance.png”)
-    print(f“  - Continuous vs. missing comparison: continuous_comparison.png”)
-    print(f“  - Random vs. missing comparison: random_comparison.png”)
-    print(f“  - Experiment configuration: experiment_config.json”)
-    print("=" * 80 + "\n")
