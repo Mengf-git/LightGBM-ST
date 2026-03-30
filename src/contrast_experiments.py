@@ -3,8 +3,7 @@ GNSS Time Series Missing Value Imputation - LightGBM + Traditional Interpolation
 ===========================================================
 New Features:
 1. Integration of Akima, KNN, Random Forest, and Cubic Spline interpolation methods
-2. SCI paper-standard visualization comparison figures with missing value and imputation display
-3. Complete method performance comparison experiments
+2. Complete method performance comparison experiments
 """
 
 import os
@@ -1088,7 +1087,6 @@ def plot_interpolation_comparison_figures(target_data, neighbor_data, feature_en
         print(f"  ✓ Saved: {save_path}")
         plt.close()
 
-    ```python
     # ====================================================================
     # Figure 2: Random clustered missing scenario - interpolation effect comparison
     # ====================================================================
