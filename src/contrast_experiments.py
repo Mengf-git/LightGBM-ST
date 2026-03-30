@@ -55,7 +55,7 @@ COLOR_SCHEME = {
 # =====================================================================
 # Core Configuration Parameters
 # =====================================================================
-FOLDER = "D:/Grade 1/GNSS-LSTM+Attention+SG/Spatial Correlation - Machine Learning/YNYS"
+FOLDER = "../data/real_GNSS"
 TARGET_STATION = "YNYS"
 NEIGHBOR_STATION = "YNLJ"
 TIME_COL = "YYYYMMDD"
