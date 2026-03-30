@@ -10,14 +10,14 @@ import lightgbm as lgb
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib import rcParams
-import optuna  # 新增
-from optuna.samplers import TPESampler  # 新增
+import optuna  
+from optuna.samplers import TPESampler  
 import json
 
 warnings.filterwarnings("ignore")
 
 # ----------------------
-# 字体统一设置
+# Uniform font settings
 # ----------------------
 rcParams['font.family'] = ['SimHei', 'Times New Roman']
 rcParams['axes.unicode_minus'] = False
@@ -28,7 +28,7 @@ rcParams['legend.fontsize'] = 11
 rcParams['figure.titlesize'] = 16
 
 # =====================================================================
-# 核心配置参数
+# Key Configuration Parameters
 # =====================================================================
 FOLDER = "D:/Grade 1/GNSS-LSTM+Attention+SG/Spatial Correlation - Machine Learning/YNYS"
 TARGET_STATION = "YNYS"
@@ -37,7 +37,7 @@ TIME_COL = "YYYYMMDD"
 VALUE_COL = "U(m)"
 
 
-# LightGBM超参数
+# LightGBM Hyperparameters
 LGBM_PARAMS = {
     'objective': 'regression',
     'metric': 'mae',
@@ -55,7 +55,7 @@ LGBM_PARAMS = {
 }
 
 # =====================================================================
-# 超参数优化模块
+# Hyperparameter Optimization Module
 # =====================================================================
 import optuna
 from optuna.samplers import TPESampler
@@ -63,15 +63,15 @@ from optuna.samplers import TPESampler
 
 def optimize_lgbm_hyperparameters(target_data, neighbor_data, output_folder, n_trials=100):
     """
-    使用Optuna进行LightGBM超参数优化
-    确保与实验流程的特征构建完全一致
+    Using Optuna for LightGBM Hyperparameter Optimization
+    Ensure full consistency with the feature engineering process in the experimental workflow
     """
     print("\n" + "=" * 80)
-    print("🔍 超参数优化（Optuna Bayesian Optimization）")
+    print("🔍 Optuna Bayesian Optimization ")
     print("=" * 80)
 
 
-    # 准备数据索引（与实验保持一致）
+    # Prepare the data index (consistent with the experiment)
     total_length = len(target_data)
     train_end = int(0.6 * total_length)
     val_end = int(0.8 * total_length)
@@ -79,16 +79,16 @@ def optimize_lgbm_hyperparameters(target_data, neighbor_data, output_folder, n_t
     train_idx = target_data.index[:train_end]
     val_idx = target_data.index[train_end:val_end]
 
-    # ⚠️ 关键：使用train_idx.union(val_idx)拟合Bias校正（与实验一致）
-    print("\n拟合Bias校正模型...")
+    # ⚠️ Key: Use `train_idx.union(val_idx)` to fit the bias correction (consistent with the experiment)
+    print("\nFitting the bias correction model...")
     feature_engineer.fit_bias_correction(
         target_data.loc[train_idx.union(val_idx)],
         neighbor_data.loc[train_idx.union(val_idx)]
     )
 
-    # ⚠️ 关键：构建特征时使用完整target_data（无人为缺失）
+    # ⚠️ Key: Use the complete target_data (with no manually imputed missing values) when building features.
     df_features = feature_engineer.create_features(
-        target_data,  # 使用完整数据
+        target_data,  
         neighbor_data,
         n_lags=7,
         rolling_windows=[3, 7, 14],
@@ -96,38 +96,38 @@ def optimize_lgbm_hyperparameters(target_data, neighbor_data, output_folder, n_t
         use_neighbor_lag0=True
     )
 
-    # 准备训练/验证数据（与实验一致）
+    # Prepare training/validation data (consistent with the experiment)
     train_df = df_features.loc[train_idx.union(val_idx)].dropna(subset=['target'])
 
-    # ⚠️ 关键：按8:2分割Train/Val
+    # ⚠️ Key: Split the data into a 8:2 training/validation split
     split_point = int(0.8 * len(train_df))
 
     train_split = train_df.iloc[:split_point]
     val_split = train_df.iloc[split_point:]
 
-    # 提取特征和目标
+    # Feature Extraction and Object Detection
     X_train = train_split.drop(columns=['target', 'neighbor'], errors='ignore')
     y_train = train_split['target']
     X_train = X_train.fillna(X_train.mean())
 
     X_val = val_split.drop(columns=['target', 'neighbor'], errors='ignore')
     y_val = val_split['target']
-    X_val = X_val.fillna(X_train.mean())  # 用训练集均值填充
+    X_val = X_val.fillna(X_train.mean())  # Pad with the mean of the training set
 
-    print(f"\n数据划分:")
-    print(f"  训练集: {len(X_train)} 样本")
-    print(f"  验证集: {len(X_val)} 样本")
-    print(f"  特征数量: {X_train.shape[1]}")
+    print(f"\nData Segmentation:")
+    print(f"  training set: {len(X_train)} Sample")
+    print(f"  Validation set: {len(X_val)} Sample")
+    print(f"  Number of features: {X_train.shape[1]}")
 
     def objective(trial):
-        """Optuna目标函数"""
+        """Optuna Objective function"""
         params = {
             'objective': 'regression',
             'metric': 'mae',
             'verbosity': -1,
             'random_state': RANDOM_SEED,
 
-            # 超参数搜索空间
+            # Hyperparameter search space
             'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
             'num_leaves': trial.suggest_int('num_leaves', 10, 50),
             'max_depth': trial.suggest_int('max_depth', 3, 12),
@@ -152,25 +152,24 @@ def optimize_lgbm_hyperparameters(target_data, neighbor_data, output_folder, n_t
 
         return mae
 
-    # 执行优化
+    # Performance Optimization
     study = optuna.create_study(
         direction='minimize',
         sampler=TPESampler(seed=RANDOM_SEED)
     )
 
-    print(f"\n开始优化（共{n_trials}次试验）...")
+    print(f"\nStart optimization ({n_trials} trials in total)...")
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
-    # 输出结果
+    # Output
     print("\n" + "=" * 80)
-    print("✅ 优化完成!")
+    print("✅ Optimization complete!")
     print("=" * 80)
-    print(f"\n最佳验证MAE: {study.best_value:.4f} mm")
-    print(f"\n最优超参数:")
+  
     for key, value in study.best_params.items():
         print(f"  {key:20s}: {value}")
 
-    # 保存优化历史图
+
     try:
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
         optuna.visualization.matplotlib.plot_optimization_history(study, ax=axes[0])
@@ -182,10 +181,9 @@ def optimize_lgbm_hyperparameters(target_data, neighbor_data, output_folder, n_t
         plt.tight_layout()
         save_path = os.path.join(output_folder, 'hyperparameter_optimization.png')
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"\n✓ 优化历史图已保存: {save_path}")
         plt.close()
     except Exception as e:
-        print(f"[警告] 可视化失败: {e}")
+        print(f"[Warning] Visualization failed: {e}")
 
     return study.best_params
 
@@ -193,7 +191,7 @@ def optimize_lgbm_hyperparameters(target_data, neighbor_data, output_folder, n_t
 # =====================================================================
 
 class SpatialCorrelationFeatureEngineering:
-    """空间相关性特征工程类"""
+    """Spatial Correlation Feature Engineering"""
 
     def __init__(self, correlation_r, neighbor_dist_km, bias_value):
 
@@ -201,13 +199,13 @@ class SpatialCorrelationFeatureEngineering:
 
     def fit_bias_correction(self, target_series, neighbor_series):
         """
-        在训练集上拟合OLS Bias校正模型
+        Fit an OLS bias-corrected model on the training set
         U_target = a + b * U_neighbor
         """
         valid_mask = target_series.notna() & neighbor_series.notna()
 
         if valid_mask.sum() < 30:
-            print("    [警告] 训练样本不足,使用默认参数")
+            print("    [Warning] Insufficient training data; using default parameters")
             self.ols_model = {'intercept': 0.0, 'coef': 1.0}
             return
 
@@ -219,7 +217,7 @@ class SpatialCorrelationFeatureEngineering:
         print(f"    ✓ Bias校正: U_target = {lr.intercept_:.4f} + {lr.coef_[0]:.4f} * U_neighbor")
 
     def apply_bias_correction(self, neighbor_series):
-        """应用Bias校正"""
+        """Apply Bias Correction"""
         if self.ols_model is None:
             return neighbor_series.copy()
 
@@ -229,24 +227,24 @@ class SpatialCorrelationFeatureEngineering:
                         n_lags=7, rolling_windows=[3, 7, 14],
                         include_target_lags=True, use_neighbor_lag0=True):
         """
-        构建完整特征矩阵
+        Constructing a Complete Feature Matrix
 
-        特征类别:
-        1. 时间特征: doy_sin, doy_cos, month, year
-        2. 邻站滞后: nbr_lag0~lagN
-        3. 邻站滚动统计: rollmean, rollstd (多窗口)
-        4. 目标站历史: tgt_lag1~lag3 (仅过去值)
-        5. 空间元特征: neighbor_r, neighbor_dist_km
-        6. Bias校正特征: nbr_adj_lag0
-        7. 缺失指标: nbr_isnan_lag0
+        Feature Categories:
+        1. Temporal Features: doy_sin, doy_cos, month, year
+        2. Neighbor Station Lags: nbr_lag0–lagN
+        3. Rolling statistics from neighboring stations: rollmean, rollstd (multi-window)
+        4. Target station history: tgt_lag1–lag3 (past values only)
+        5. Spatial meta-features: neighbor_r, neighbor_dist_km
+        6. Bias correction features: nbr_adj_lag0
+        7. Missing value indicators: nbr_isnan_lag0
         """
-        # 创建DataFrame
+        # Build DataFrame
         df = pd.DataFrame({
             'target': target_series,
             'neighbor': neighbor_series
         })
 
-        # === 1. 时间特征 ===
+        # === 1. Temporal characteristics ===
         df['doy_sin'] = np.sin(2 * np.pi * df.index.dayofyear / 365.25)
         df['doy_cos'] = np.cos(2 * np.pi * df.index.dayofyear / 365.25)
 
@@ -257,28 +255,28 @@ class SpatialCorrelationFeatureEngineering:
                 continue
             df[f'nbr_lag{lag}'] = df['neighbor'].shift(lag)
 
-        # === 3. 邻站滚动统计 (仅使用过去窗口) ===
+        # === 3. Neighboring station lag feature (lag0 is permitted for offline interpolation) ===
         for window in rolling_windows:
-            # 注意shift(1)确保不包含当前值
+            # Note: Use `shift(1)` to ensure the current value is not included.
             df[f'nbr_rollmean_{window}'] = df['neighbor'].shift(1).rolling(
                 window, min_periods=1).mean()
             df[f'nbr_rollstd_{window}'] = df['neighbor'].shift(1).rolling(
                 window, min_periods=1).std().fillna(0)
 
 
-        # === 4. 目标站历史滞后 (仅过去值) ===
+        # === 4. Historical lag for the target station (past values only) ===
         if include_target_lags:
             for lag in [1, 2, 3, 7]:
                 df[f'tgt_lag{lag}'] = df['target'].shift(lag)
 
 
-        # === 5. Bias校正特征 ===
+        # === 5. Bias Calibration characteristics ===
         if self.ols_model is not None:
             nbr_adj = self.apply_bias_correction(df['neighbor'])
             for lag in range(min(3, n_lags + 1)):
                 df[f'nbr_adj_lag{lag}'] = nbr_adj.shift(lag)
 
-        # === 6. 缺失指标 ===
+        # === 6. Missing metric ===
         df['nbr_isnan_lag0'] = df['neighbor'].isna().astype(int)
         df['n_neighbors_available'] = (~df['neighbor'].isna()).astype(int)
 
@@ -286,25 +284,25 @@ class SpatialCorrelationFeatureEngineering:
 
 
 class LightGBMSpatialInterpolator:
-    """基于LightGBM的空间相关性插值器"""
+    """A Spatially Correlated Interpolator Based on LightGBM"""
 
     def __init__(self, feature_engineer, lgbm_params=None):
         self.feature_engineer = feature_engineer
         self.lgbm_params = lgbm_params or LGBM_PARAMS
-        self.models = []  # 存储Bootstrap模型集合
+        self.models = []  # Store the Bootstrap model collection
         self.feature_names = None
 
     def _prepare_train_data(self, df_features, train_idx):
-        """准备训练数据"""
+        """Prepare training data"""
         train_df = df_features.loc[train_idx]
 
-        # 只保留target非NaN的行
+        # Keep only rows where target is not NaN
         train_df = train_df.dropna(subset=['target'])
 
         if len(train_df) < 50:
-            raise ValueError(f"训练样本不足: {len(train_df)}")
+            raise ValueError(f"Insufficient training data: {len(train_df)}")
 
-        # 填充特征中的NaN (用训练集均值)
+        # NaN values in features (replaced with the mean of the training set)
         X = X.fillna(X.mean())
 
         self.feature_names = X.columns.tolist()
@@ -312,7 +310,7 @@ class LightGBMSpatialInterpolator:
         return X, y
 
     def train_single_model(self, X_train, y_train, X_val=None, y_val=None):
-        """训练单个LightGBM模型"""
+        """Train a single LightGBM model"""
         model = lgb.LGBMRegressor(**self.lgbm_params)
 
         if X_val is not None and y_val is not None:
@@ -327,11 +325,11 @@ class LightGBMSpatialInterpolator:
         return model
 
     def get_feature_importance(self, top_n=15):
-        """获取特征重要性 (平均所有模型)"""
+        """Obtain feature importance (averaged across all models)"""
         if not self.models:
             return None
 
-        # 平均所有模型的特征重要性
+        # Average feature importance across all models
         importances = np.zeros(len(self.feature_names))
 
         for model in self.models:
@@ -343,12 +341,12 @@ class LightGBMSpatialInterpolator:
 
 
 class BaselineInterpolators:
-    """基线插值方法"""
+    """Baseline interpolation methods"""
 
     @staticmethod
     def time_only_baseline(df_features, train_idx, test_idx):
         """
-        Baseline A: 仅使用时间特征
+        Baseline A: Use time-based features only
         """
         time_features = ['doy_sin', 'doy_cos', 'month_norm', 'year_norm']
 
@@ -368,7 +366,7 @@ class BaselineInterpolators:
     @staticmethod
     def time_plus_target_lags(df_features, train_idx, test_idx):
         """
-        Baseline B: 时间特征 + 目标站历史
+        Baseline B: Time-based features + History of destination stations
         """
         features = ['doy_sin', 'doy_cos', 'month_norm', 'year_norm',
                     'tgt_lag1', 'tgt_lag2', 'tgt_lag3', 'tgt_lag7']
@@ -388,17 +386,17 @@ class BaselineInterpolators:
 
     @staticmethod
     def linear_interpolation(series, missing_indices):
-        """线性插值基线"""
+        """Linear Interpolation Baseline"""
         filled = series.copy()
 
-        # 如果是DatetimeIndex,直接使用;如果是整数索引,需要转换
+        
         if isinstance(missing_indices, pd.DatetimeIndex):
-            # 直接使用DatetimeIndex进行索引
+            # Index directly using DatetimeIndex
             filled.loc[missing_indices] = np.nan
             filled = filled.interpolate(method='linear').bfill().ffill()
             return filled.loc[missing_indices].values
         else:
-            # 整数索引的情况(原有逻辑)
+            # The case of integer indexes
             if not isinstance(missing_indices, (list, np.ndarray, pd.Index)):
                 raise ValueError("missing_indices must be a list, numpy array or pandas Index")
 
@@ -406,7 +404,7 @@ class BaselineInterpolators:
             if len(missing_indices) == 0:
                 return np.array([])
 
-            # 确保索引在有效范围内
+            # Ensure that the index is within the valid range
             if (missing_indices < 0).any() or (missing_indices >= len(series)).any():
                 raise ValueError("Some indices are out of bounds")
 
@@ -415,7 +413,7 @@ class BaselineInterpolators:
             return filled.iloc[missing_indices].values
 
 def create_continuous_missing(data, n_segments, days_per_segment, seed=None):
-    """创建连续缺失段 (保持与原代码一致)"""
+    """Create a continuous missing segment """
     if seed is not None:
         np.random.seed(seed)
 
@@ -449,7 +447,7 @@ def create_continuous_missing(data, n_segments, days_per_segment, seed=None):
 
 
 def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segment=30, seed=None):
-    """创建随机聚集缺失"""
+    """Create a random cluster with missing values"""
     if seed is not None:
         np.random.seed(seed)
 
@@ -467,11 +465,11 @@ def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segm
 
         remaining = n_total - current_pos
 
-        # 计算跳跃距离（避免randint参数错误）
+        # Calculate the jump distance
         if remaining > 30:
             jump = np.random.randint(5, min(30, remaining // 2))
         elif remaining > 2:
-            jump_max = max(2, remaining // 2)  # 确保至少为2
+            jump_max = max(2, remaining // 2)  
             jump = np.random.randint(1, jump_max)
         else:
             jump = 1
@@ -486,7 +484,7 @@ def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segm
 
 
 
-    # 确保缺失数量准确
+    # Ensure the accuracy of the missing quantities
     missing_indices = sorted(list(set(missing_indices)))[:n_missing]
 
     if len(missing_indices) < n_missing:
@@ -506,22 +504,22 @@ def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segm
 
 def calculate_metrics(true_values, predicted_values, pred_lower, pred_upper, missing_indices):
     """
-    计算评估指标 + CI覆盖率
+    Calculate evaluation metrics + CI coverage
 
-    参数:
-        true_values: Series, 真实值(完整数据)
-        predicted_values: array-like, 预测值(仅缺失位置)
-        pred_lower: array-like, 置信下界
-        pred_upper: array-like, 置信上界
-        missing_indices: DatetimeIndex 或 list, 缺失位置的索引
+    Parameters:
+        true_values: Series, actual values (complete data)
+        predicted_values: array-like, predicted values (missing positions only)
+        pred_lower: array-like, lower confidence bound
+        pred_upper: array-like, upper confidence bound
+        missing_indices: DatetimeIndex or list, indices of missing positions
     """
-    # 确保 missing_indices 是有效的索引
+    # Ensure that `missing_indices` is a valid index
     if isinstance(missing_indices, pd.DatetimeIndex):
         valid_indices = missing_indices
     else:
         valid_indices = pd.DatetimeIndex(missing_indices)
 
-    # 转换预测值为 Series,使用 missing_indices 作为索引
+    # Convert the predicted values to a Series, using `missing_indices` as the index
     if isinstance(predicted_values, pd.Series):
         pred_series = predicted_values
     else:
@@ -533,11 +531,11 @@ def calculate_metrics(true_values, predicted_values, pred_lower, pred_upper, mis
     if pred_upper is not None and not isinstance(pred_upper, pd.Series):
         pred_upper = pd.Series(pred_upper, index=valid_indices)
 
-    # 提取真实值和预测值
+    # Retrieve actual and forecast values
     true_missing = true_values.loc[valid_indices]
     pred_missing = pred_series.loc[valid_indices]
 
-    # 筛选有效值
+    # Filter valid values
     valid_mask = true_missing.notna() & pred_missing.notna() & np.isfinite(pred_missing)
 
     if valid_mask.sum() == 0:
@@ -569,20 +567,20 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
                                  missing_days_list, missing_ratios,
                                  output_folder):
     """
-    运行完整的LightGBM+空间相关性实验
+    Run the full LightGBM+spatial correlation experiment
     """
     print("\n" + "=" * 80)
-    print("🚀 LightGBM + 空间相关性融合插值实验")
+    print("🚀 LightGBM + Experiments on Spatial Correlation Fusion Interpolation")
     print("=" * 80)
 
-    # 初始化特征工程
+    # Initial Feature Engineering
     feature_engineer = SpatialCorrelationFeatureEngineering(
         correlation_r=CORRELATION_R,
         neighbor_dist_km=NEIGHBOR_DIST_KM,
         bias_value=BIAS_VALUE
     )
 
-    # 准备数据索引
+    # Prepare the data index
     total_length = len(target_data)
     train_end = int(0.6 * total_length)
     val_end = int(0.8 * total_length)
@@ -591,13 +589,13 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
     val_idx = target_data.index[train_end:val_end]
     test_idx = target_data.index[val_end:]
 
-    print(f"\n数据划分:")
-    print(f"  Train: {len(train_idx)} 天 ({train_idx[0].date()} ~ {train_idx[-1].date()})")
-    print(f"  Val:   {len(val_idx)} 天 ({val_idx[0].date()} ~ {val_idx[-1].date()})")
-    print(f"  Test:  {len(test_idx)} 天 ({test_idx[0].date()} ~ {test_idx[-1].date()})")
+    print(f"\nData Segmentation:")
+    print(f"  Train: {len(train_idx)} Day ({train_idx[0].date()} ~ {train_idx[-1].date()})")
+    print(f"  Val:   {len(val_idx)} Day ({val_idx[0].date()} ~ {val_idx[-1].date()})")
+    print(f"  Test:  {len(test_idx)} Day ({test_idx[0].date()} ~ {test_idx[-1].date()})")
 
-    # 在训练集上拟合Bias校正
-    print("\n拟合Bias校正模型...")
+    # Fitting bias correction on the training set
+    print("\nFitting the bias correction model...")
     feature_engineer.fit_bias_correction(
         target_data.loc[train_idx.union(val_idx)],
         neighbor_data.loc[train_idx.union(val_idx)]
@@ -606,15 +604,15 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
     results_list = []
 
     # ====================================================================
-    # 实验1: 连续缺失
+    # Experiment 1: Continuous Missing Values
     # ====================================================================
     print("\n" + "=" * 80)
-    print("🔴 实验1: 连续缺失段")
+    print("🔴 Experiment 1: Continuous Missing Segments")
     print("=" * 80)
 
     for missing_days in missing_days_list:
         print(f"\n{'─' * 80}")
-        print(f"缺失段长度: {missing_days} 天")
+        print(f"Length of missing segment: {missing_days} Day")
         print(f"{'─' * 80}")
 
         method_results = {
@@ -625,24 +623,24 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
         }
 
         for repeat in range(N_REPEATS):
-            print(f"\n  重复 {repeat + 1}/{N_REPEATS}")
+            print(f"\n  repeat {repeat + 1}/{N_REPEATS}")
 
             seed = RANDOM_SEED + repeat
-            # 转换为全局索引
+            # Convert to global index
             missing_indices_global = test_idx[missing_indices_local]
 
-            # 构建完整数据 (Train+Val无缺失, Test有缺失)
+            # Build a complete dataset (Train and Val have no missing values; Test has missing values)
             full_target = target_data.copy()
             full_target.loc[missing_indices_global] = np.nan
 
-            # === 构建特征 ===
+            # === Feature construction ===
             df_features = feature_engineer.create_features(
                 full_target, neighbor_data,
                 n_lags=7, rolling_windows=[3, 7, 14],
                 include_target_lags=True, use_neighbor_lag0=True
             )
 
-            # === 模型1: 完整LightGBM (含空间特征) ===
+            # === Model1: Full LightGBM  ===
             interpolator = LightGBMSpatialInterpolator(feature_engineer, LGBM_PARAMS)
             interpolator.train_ensemble_residual(df_features, train_idx.union(val_idx))
             pred_median, pred_lower, pred_upper = interpolator.predict_with_uncertainty_residual(
@@ -655,8 +653,8 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
             method_results['lgbm_full']['corr'].append(metrics['correlation'])
 
 
-            # === 模型2: LightGBM (无空间特征 - 消融) ===
-            # 移除空间相关性特征
+            # === Model 2: LightGBM  ===
+            # Remove spatial correlation features
             df_no_spatial = df_features.drop(columns=[
                                                          'neighbor_r', 'neighbor_dist_km', 'spatial_weight'
                                                      ] + [c for c in df_features.columns if 'nbr_adj' in c],
@@ -665,7 +663,7 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
             feature_engineer_nospatial = SpatialCorrelationFeatureEngineering(0, 0, 0)
             interpolator_nospatial = LightGBMSpatialInterpolator(feature_engineer_nospatial, LGBM_PARAMS)
 
-            # 手动准备训练数据
+            # Manually prepare training data
             train_df_ns = df_no_spatial.loc[train_idx.union(val_idx)].dropna(subset=['target'])
             X_train_ns = train_df_ns.drop(columns=['target', 'neighbor'], errors='ignore').fillna(train_df_ns.mean())
             y_train_ns = train_df_ns['target']
@@ -715,7 +713,7 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
             print(f"    ✓ Time_Only: RMSE={metrics_time['rmse']:.4f}")
             print(f"    ✓ Linear: RMSE={metrics_linear['rmse']:.4f}")
 
-        # 汇总结果
+        # Summary of Results
         for method_name, method_data in method_results.items():
             if len(method_data['rmse']) > 0:
                 results_list.append({
@@ -733,15 +731,15 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
                 })
 
     # ====================================================================
-    # 实验2: 随机聚集缺失
+    # Experiment 2: Random Clustering Missing
     # ====================================================================
     print("\n" + "=" * 80)
-    print("🔵 实验2: 随机聚集缺失")
+    print("🔵 Experiment 2: Random Clustering Missing")
     print("=" * 80)
 
     for missing_ratio in missing_ratios:
         print(f"\n{'─' * 80}")
-        print(f"缺失比例: {missing_ratio * 100:.1f}%")
+        print(f"Missing proportion: {missing_ratio * 100:.1f}%")
         print(f"{'─' * 80}")
 
         method_results = {
@@ -752,11 +750,11 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
         }
 
         for repeat in range(N_REPEATS):
-            print(f"\n  重复 {repeat + 1}/{N_REPEATS}")
+            print(f"\n  repeat {repeat + 1}/{N_REPEATS}")
 
             seed = RANDOM_SEED + repeat
 
-            # 创建缺失 (仅在Test段)
+            # Create missing (in the Test section only)
             test_data = target_data.loc[test_idx].copy()
 
             masked_test, missing_indices_local = create_random_clustered_missing(
@@ -765,18 +763,18 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
 
             missing_indices_global = test_idx[missing_indices_local]
 
-            # 构建完整数据
+            # Build a comprehensive dataset
             full_target = target_data.copy()
             full_target.loc[missing_indices_global] = np.nan
 
-            # 构建特征
+            # Feature construction
             df_features = feature_engineer.create_features(
                 full_target, neighbor_data,
                 n_lags=7, rolling_windows=[3, 7, 14],
                 include_target_lags=True, use_neighbor_lag0=True
             )
 
-            # === 完整模型 ===
+            # === Full Model ===
             interpolator = LightGBMSpatialInterpolator(feature_engineer, LGBM_PARAMS)
 
             method_results['lgbm_full']['rmse'].append(metrics['rmse'])
@@ -784,7 +782,7 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
             method_results['lgbm_full']['corr'].append(metrics['correlation'])
             method_results['lgbm_full']['ci_cov'].append(metrics['ci_coverage'])
 
-            # === 无空间特征模型 ===
+            # === Non-spatial model  ===
             df_no_spatial = df_features.drop(columns=[
                                                          'neighbor_r', 'neighbor_dist_km', 'spatial_weight'
                                                      ] + [c for c in df_features.columns if 'nbr_adj' in c],
@@ -826,7 +824,7 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
 
             print(f"    ✓ LGBM_Full: RMSE={metrics['rmse']:.4f}, CI_cov={metrics['ci_coverage']:.3f}")
 
-        # 汇总结果
+       
         for method_name, method_data in method_results.items():
             if len(method_data['rmse']) > 0:
                 results_list.append({
@@ -844,17 +842,17 @@ def run_spatial_lgbm_experiments(target_data, neighbor_data,
                     'n_repeats': N_REPEATS
                 })
 
-    # 保存结果
+    # Save result
     results_df = pd.DataFrame(results_list)
     results_path = os.path.join(output_folder, 'lgbm_spatial_results.csv')
     results_df.to_csv(results_path, index=False, encoding='utf-8-sig')
-    print(f"\n✓ 结果已保存: {results_path}")
+    print(f"\n✓ The results have been saved: {results_path}")
 
     return results_df, interpolator
 
 
 def plot_feature_importance(interpolator, output_folder):
-    """绘制特征重要性"""
+    """Plotting Feature Importance"""
     importance_df = interpolator.get_feature_importance(top_n=20)
 
     if importance_df is None:
@@ -870,14 +868,14 @@ def plot_feature_importance(interpolator, output_folder):
 
     save_path = os.path.join(output_folder, 'feature_importance.png')
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"✓ 特征重要性图已保存: {save_path}")
+    print(f"✓ The feature importance plot has been saved: {save_path}")
     plt.close()
 
 
 def plot_comparison_results(results_df, output_folder):
-    """绘制方法对比图"""
+    """Comparison Chart of Drawing Methods"""
 
-    # 图1: 连续缺失 - RMSE对比
+    # Figure 1: Comparison of Continuous Missing Data and RMSE
     continuous_df = results_df[results_df['experiment'] == 'continuous']
 
     if len(continuous_df) > 0:
@@ -916,10 +914,10 @@ def plot_comparison_results(results_df, output_folder):
         plt.tight_layout()
         save_path = os.path.join(output_folder, 'continuous_comparison.png')
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ 连续缺失对比图已保存: {save_path}")
+        print(f"✓ The comparison chart of consecutive missing values has been saved: {save_path}")
         plt.close()
 
-    # 图2: 随机缺失 - RMSE对比
+    # Figure 2: Comparison of Random Missing Data and RMSE
     random_df = results_df[results_df['experiment'] == 'random']
 
     if len(random_df) > 0:
@@ -956,17 +954,17 @@ def plot_comparison_results(results_df, output_folder):
         plt.tight_layout()
         save_path = os.path.join(output_folder, 'random_comparison.png')
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ 随机缺失对比图已保存: {save_path}")
+        print(f"✓ The comparison chart for missing at random has been saved: {save_path}")
         plt.close()
 
 
 def generate_summary_report(results_df, output_folder):
-    """生成汇总报告"""
+    """Generate a summary report"""
     print("\n" + "=" * 80)
-    print("📊 生成汇总报告")
+    print("📊 Generate a summary report")
     print("=" * 80)
 
-    # 1. 总体性能
+    # 1. Overall Performance
     summary_overall = results_df.groupby('method').agg({
         'rmse_mean': 'mean',
         'mae_mean': 'mean',
@@ -974,72 +972,54 @@ def generate_summary_report(results_df, output_folder):
         'ci_coverage_mean': 'mean'
     }).round(4)
 
-    print("\n总体平均性能:")
+    print("\nOverall Average Performance:")
     print(summary_overall)
 
     overall_path = os.path.join(output_folder, 'summary_overall.csv')
     summary_overall.to_csv(overall_path, encoding='utf-8-sig')
 
-    # 2. 按实验类型汇总
+    # 2. Summary by Experiment Type
     summary_by_exp = results_df.groupby(['experiment', 'method']).agg({
         'rmse_mean': ['mean', 'std'],
         'mae_mean': ['mean', 'std'],
         'correlation_mean': ['mean', 'std']
     }).round(4)
 
-    print("\n按实验类型汇总:")
+    print("\nSummary by Experiment Type:")
     print(summary_by_exp)
 
     exp_path = os.path.join(output_folder, 'summary_by_experiment.csv')
     summary_by_exp.to_csv(exp_path, encoding='utf-8-sig')
 
-    # 3. CI覆盖率分析
-    ci_coverage = results_df[results_df['method'] == 'lgbm_full']['ci_coverage_mean'].dropna()
-
-    if len(ci_coverage) > 0:
-        print(f"\n95% CI覆盖率统计 (LGBM_Full):")
-        print(f"  平均: {ci_coverage.mean():.3f}")
-        print(f"  标准差: {ci_coverage.std():.3f}")
-        print(f"  中位数: {ci_coverage.median():.3f}")
-        print(f"  范围: [{ci_coverage.min():.3f}, {ci_coverage.max():.3f}]")
-
-    # 4. 方法排名
-    print("\n" + "=" * 80)
-    print("🏆 方法排名 (基于平均RMSE)")
-    print("=" * 80)
-
-    ranking = results_df.groupby('method')['rmse_mean'].mean().sort_values()
-    for rank, (method, rmse) in enumerate(ranking.items(), 1):
-        print(f"  {rank}. {method:20s} - RMSE: {rmse:.4f} mm")
-
-    # 5. 改进百分比
+    
+    # 3. Percentage improvement
     if 'lgbm_full' in ranking.index and 'linear' in ranking.index:
         improvement = (ranking['linear'] - ranking['lgbm_full']) / ranking['linear'] * 100
-        print(f"\n✨ LGBM_Full 相比 Linear 改进: {improvement:.2f}%")
+        print(f"\n✨ LGBM_Full Compared to Linear Improvements: {improvement:.2f}%")
 
     if 'lgbm_full' in ranking.index and 'lgbm_no_spatial' in ranking.index:
         spatial_benefit = (ranking['lgbm_no_spatial'] - ranking['lgbm_full']) / ranking['lgbm_no_spatial'] * 100
-        print(f"✨ 空间特征贡献: {spatial_benefit:.2f}%")
+        print(f"✨ Contribution of spatial characteristics: {spatial_benefit:.2f}%")
 
 
 # =====================================================================
 # 主程序
 # =====================================================================
 if __name__ == "__main__":
-    print("\n" + "=" * 80)
-    print("LightGBM + 空间相关性融合插值系统")
-    print("=" * 80)
-    print(f"配置信息:")
-    print(f"  - 目标站点: {TARGET_STATION}")
-    print(f"  - 邻近站点: {NEIGHBOR_STATION}")
-    print(f"  - 空间相关性: r = {CORRELATION_R:.4f}")
-    print(f"  - 站点距离: {NEIGHBOR_DIST_KM:.2f} km")
-    print(f"  - 分析时间段: {START_DATE} 至 {END_DATE}")
-    print(f"  - 重复实验次数: {N_REPEATS}")
-    print("=" * 80)
+    print(“\n” + “=” * 80)
+    print(“LightGBM + Spatial Correlation Fusion Interpolation System”)
+    print(“=” * 80)
+    print(f“Configuration Information:”)
+    print(f“  - Target Station: {TARGET_STATION}”)
+    print(f“  - Neighboring Station: {NEIGHBOR_STATION}”)
+    print(f“  - Spatial Correlation: r = {CORRELATION_R:.4f}”)
+    print(f“  - Station Distance: {NEIGHBOR_DIST_KM:.2f} km”)
+    print(f“  - Analysis period: {START_DATE} to {END_DATE}”)
+    print(f“  - Number of repetitions: {N_REPEATS}”)
+    print(“=” * 80)
 
-    # 1. 加载数据
-    print("\n加载数据...")
+    # 1. Load data
+    print(“\nLoading data...”)
     try:
         df_target = pd.read_csv(
             os.path.join(FOLDER, f"{TARGET_STATION}.csv"),
@@ -1050,65 +1030,65 @@ if __name__ == "__main__":
             parse_dates=[TIME_COL]
         )
 
-        # 处理数据
+        # Process data
         df_target = df_target.set_index(TIME_COL).sort_index()
         df_neighbor = df_neighbor.set_index(TIME_COL).sort_index()
 
-        # 提取指定时间段
+        # Extract data for a specified time period
         start_dt = pd.to_datetime(START_DATE)
         end_dt = pd.to_datetime(END_DATE)
 
         target_data = df_target.loc[start_dt:end_dt, VALUE_COL]
         neighbor_data = df_neighbor.loc[start_dt:end_dt, VALUE_COL]
 
-        # 重新索引确保连续
+        # Reindexing ensures continuity
         full_date_range = pd.date_range(start=start_dt, end=end_dt, freq='D')
         target_data = target_data.reindex(full_date_range)
         neighbor_data = neighbor_data.reindex(full_date_range)
 
-        print(f"✓ 数据加载成功")
-        print(f"  - 目标站: {len(target_data)} 天, 缺失 {target_data.isna().sum()} 天")
-        print(f"  - 邻站: {len(neighbor_data)} 天, 缺失 {neighbor_data.isna().sum()} 天")
+        print(f"✓ Data loaded successfully")
+        print(f"  - target station: {len(target_data)} days, missing {target_data.isna().sum()} days")
+        print(f"  - neighbor station: {len(neighbor_data)} days, missing {neighbor_data.isna().sum()} 天")
 
     except Exception as e:
-        print(f"[错误] 数据加载失败: {e}")
+        print(f"[Error] Data loading failed: {e}")
         exit(1)
 
-    # 2. 创建输出文件夹
+    # 2. Create an output folder
     output_folder = os.path.join(FOLDER, "lgbm_spatial_results")
     os.makedirs(output_folder, exist_ok=True)
-    print(f"\n✓ 输出文件夹: {output_folder}")
+    print(f"\n✓ Output folder: {output_folder}")
     # ===================================================================
-    # 🔥 超参数优化（可选）
+    # 🔥 Hyperparameter Optimization
     # ===================================================================
-    ENABLE_HYPERPARAMETER_OPTIMIZATION = True  # 首次运行设为True，后续设为False
+    ENABLE_HYPERPARAMETER_OPTIMIZATION = True  
 
     if ENABLE_HYPERPARAMETER_OPTIMIZATION:
         print("\n" + "=" * 80)
-        print("⚙️ 开始超参数优化（约需10-20分钟）")
+        print("⚙️ Start hyperparameter optimization")
         print("=" * 80)
 
         best_params = optimize_lgbm_hyperparameters(
             target_data, neighbor_data, output_folder,
-            n_trials=100  # 可调整：50(快速), 100(推荐), 200(精细)
+            n_trials=100  
         )
 
-        # 更新全局参数
+        # Update global parameters
         LGBM_PARAMS.update(best_params)
 
-        # 保存最优参数
+        # Save optimal parameters
         best_params_path = os.path.join(output_folder, 'best_hyperparameters.json')
         with open(best_params_path, 'w', encoding='utf-8') as f:
             json.dump(best_params, f, indent=4, ensure_ascii=False)
 
-        print(f"\n✓ 最优超参数已保存: {best_params_path}")
-        print("\n💡 提示: 后续运行可将 ENABLE_HYPERPARAMETER_OPTIMIZATION 设为 False")
-        print("         并手动更新 LGBM_PARAMS 字典以节省时间")
+         print(f“\n✓ Optimal hyperparameters saved: {best_params_path}”)
+        print(“\n💡 Tip: For subsequent runs, set ENABLE_HYPERPARAMETER_OPTIMIZATION to False”)
+        print(“         and manually update the LGBM_PARAMS dictionary to save time”)
     else:
-        print("\n⏭️ 跳过超参数优化，使用预设参数")
+        print("\n⏭️ Skip hyperparameter tuning and use preset parameters")
 
     # ===================================================================
-    # 3. 确定实验参数
+    # 3. Determine the experimental parameters
     sample_length = len(target_data)
 
     if sample_length > 1000:
@@ -1120,11 +1100,11 @@ if __name__ == "__main__":
 
     missing_ratios = np.arange(0.05, 0.55, 0.05)
 
-    print(f"\n实验配置:")
-    print(f"  - 连续缺失天数: {missing_days_list}")
-    print(f"  - 随机缺失比例: {[f'{r * 100:.0f}%' for r in missing_ratios]}")
+    print(f“\nExperiment configuration:”)
+    print(f“  - Number of consecutive missing days: {missing_days_list}”)
+    print(f“  - Random missing rates: {[f'{r * 100:.0f}%' for r in missing_ratios]}”)
 
-    # 4. 运行实验
+    # 4. Conduct the experiment
     results_df, final_interpolator = run_spatial_lgbm_experiments(
         target_data, neighbor_data,
         missing_days_list, missing_ratios,
@@ -1133,16 +1113,16 @@ if __name__ == "__main__":
 
     # 5. 生成可视化
     print("\n" + "=" * 80)
-    print("生成可视化图表...")
+    print("Generate visualizations...")
     print("=" * 80)
 
     plot_feature_importance(final_interpolator, output_folder)
     plot_comparison_results(results_df, output_folder)
 
-    # 6. 生成汇总报告
+    # 6. Generate a summary report
     generate_summary_report(results_df, output_folder)
 
-    # 7. 保存配置信息
+    # 7. Save configuration settings
     config_info = {
         'target_station': TARGET_STATION,
         'neighbor_station': NEIGHBOR_STATION,
@@ -1164,14 +1144,14 @@ if __name__ == "__main__":
         json.dump(config_info, f, indent=4, ensure_ascii=False)
 
     print("\n" + "=" * 80)
-    print("✅ 实验完成!")
-    print("=" * 80)
-    print(f"所有结果已保存至: {output_folder}")
-    print(f"  - 详细结果: lgbm_spatial_results.csv")
-    print(f"  - 总体汇总: summary_overall.csv")
-    print(f"  - 实验汇总: summary_by_experiment.csv")
-    print(f"  - 特征重要性图: feature_importance.png")
-    print(f"  - 连续缺失对比: continuous_comparison.png")
-    print(f"  - 随机缺失对比: random_comparison.png")
-    print(f"  - 实验配置: experiment_config.json")
+    print(“✅ Experiment complete!”)
+    print(“=” * 80)
+    print(f“All results have been saved to: {output_folder}”)
+    print(f“  - Detailed results: lgbm_spatial_results.csv”)
+    print(f“  - Overall summary: summary_overall.csv”)
+    print(f“  - Experiment summary: summary_by_experiment.csv”)
+    print(f“  - Feature importance plot: feature_importance.png”)
+    print(f“  - Continuous vs. missing comparison: continuous_comparison.png”)
+    print(f“  - Random vs. missing comparison: random_comparison.png”)
+    print(f“  - Experiment configuration: experiment_config.json”)
     print("=" * 80 + "\n")
