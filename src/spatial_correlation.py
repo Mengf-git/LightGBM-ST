@@ -1,12 +1,12 @@
 """
-GNSS站点间空间相关性分析
-核心功能：
-1. 时间对齐与共同样本数统计
-2. Haversine距离计算
-3. Pearson/Spearman相关系数（含bootstrap CI和permutation test）
-4. 幅值差异指标（Bias, RMSE, MAE, σ比）
-5. 互相关与滞后分析
-6. 输出完整的pairwise_metrics.csv与可视化
+GNSS Station Spatial Correlation Analysis - SCI Paper-Grade Code
+Core Features:
+1. Temporal alignment and common sample count statistics
+2. Haversine distance calculation
+3. Pearson/Spearman correlation coefficients (with bootstrap CI and permutation test)
+4. Amplitude difference metrics (Bias, RMSE, MAE, sigma ratio)
+5. Cross-correlation and lag analysis
+6. Output complete pairwise_metrics.csv and visualizations
 """
 
 import numpy as np
@@ -16,39 +16,36 @@ import seaborn as sns
 from scipy import stats, signal
 from scipy.spatial.distance import cdist
 import warnings
-import os
-import pandas as pd
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data", "real_GNSS")
 
 warnings.filterwarnings('ignore')
 
+# Set random seed for reproducibility
 np.random.seed(0)
 
+
 class GNSSCorrelationAnalysis:
-    """GNSS站点空间相关性分析类"""
+    """GNSS Station Spatial Correlation Analysis Class"""
 
     def __init__(self, nboot=2000, nperm=2000):
         """
-        参数:
-            nboot: Bootstrap重采样次数
-            nperm: Permutation置换检验次数
+        Parameters:
+            nboot: Number of bootstrap resampling iterations
+            nperm: Number of permutation test iterations
         """
         self.nboot = nboot
         self.nperm = nperm
 
     def haversine_distance(self, lat1, lon1, lat2, lon2):
         """
-        计算Haversine球面距离（单位：km）
+        Calculate Haversine spherical distance (unit: km)
 
-        公式:
+        Formula:
             Δφ = φ2 - φ1
             Δλ = λ2 - λ1
             a = sin²(Δφ/2) + cos(φ1)·cos(φ2)·sin²(Δλ/2)
             d = 2R·arcsin(√a), R=6371 km
         """
-        R = 6371.0  # 地球半径（km）
+        R = 6371.0  # Earth radius (km)
 
         lat1_rad, lon1_rad = np.radians(lat1), np.radians(lon1)
         lat2_rad, lon2_rad = np.radians(lat2), np.radians(lon2)
@@ -63,9 +60,9 @@ class GNSSCorrelationAnalysis:
 
     def bootstrap_correlation(self, x, y):
         """
-        Bootstrap方法计算Pearson相关系数的95%置信区间
+        Compute 95% confidence interval for Pearson correlation using bootstrap
 
-        返回: (r均值, CI下界, CI上界)
+        Returns: (mean r, CI lower bound, CI upper bound)
         """
         n = len(x)
         r_boot = np.zeros(self.nboot)
@@ -82,9 +79,9 @@ class GNSSCorrelationAnalysis:
 
     def permutation_test(self, x, y):
         """
-        Permutation置换检验计算p-value
+        Compute p-value using permutation test
 
-        H0: x和y之间无相关性
+        H0: No correlation between x and y
         """
         r_obs = stats.pearsonr(x, y)[0]
         r_perm = np.zeros(self.nperm)
@@ -99,27 +96,27 @@ class GNSSCorrelationAnalysis:
 
     def cross_correlation(self, x, y, max_lag=180):
         """
-        计算互相关并找到最大相关及对应滞后
+        Compute cross-correlation and find maximum correlation with corresponding lag
 
-        参数:
-            max_lag: 最大滞后天数（建议≤N/2）
+        Parameters:
+            max_lag: Maximum lag in days (recommended <= N/2)
 
-        返回: (最大互相关值, 对应滞后天数)
+        Returns: (maximum cross-correlation value, corresponding lag in days)
         """
-        # 标准化序列
+        # Normalize series
         x_norm = (x - np.mean(x)) / (np.std(x) * len(x))
         y_norm = (y - np.mean(y)) / np.std(y)
 
-        # 计算互相关
+        # Compute cross-correlation
         correlation = signal.correlate(y_norm, x_norm, mode='full')
         lags = signal.correlation_lags(len(x), len(y), mode='full')
 
-        # 限制在max_lag范围内
+        # Restrict to max_lag range
         mask = np.abs(lags) <= max_lag
         correlation = correlation[mask]
         lags = lags[mask]
 
-        # 找到最大值
+        # Find maximum value
         max_idx = np.argmax(np.abs(correlation))
         cc_max = correlation[max_idx]
         lag_at_max = lags[max_idx]
@@ -128,10 +125,10 @@ class GNSSCorrelationAnalysis:
 
     def detrend_series(self, series, method='linear'):
         """
-        去趋势处理
+        Detrend a time series
 
-        参数:
-            method: 'linear' 或 'constant'
+        Parameters:
+            method: 'linear' or 'constant'
         """
         if method == 'linear':
             return signal.detrend(series, type='linear')
@@ -143,19 +140,19 @@ class GNSSCorrelationAnalysis:
                      date_col='YYYYMMDD', value_col='U(m)',
                      detrend=False):
         """
-        分析单对站点的空间相关性
+        Analyze spatial correlation for a single station pair
 
-        参数:
-            df1, df2: 两个站点的DataFrame（必须包含date_col和value_col）
-            station1_name, station2_name: 站点名称
-            lat1, lon1, lat2, lon2: 两站经纬度
-            date_col: 日期列名
-            value_col: 数值列名（如vertical位移）
-            detrend: 是否去趋势
+        Parameters:
+            df1, df2: DataFrames for two stations (must contain date_col and value_col)
+            station1_name, station2_name: Station names
+            lat1, lon1, lat2, lon2: Latitude and longitude of both stations
+            date_col: Name of date column
+            value_col: Name of value column (e.g., vertical displacement)
+            detrend: Whether to apply detrending
 
-        返回: dict，包含所有指标
+        Returns: dict containing all metrics
         """
-        # 1. 时间对齐（取交集）
+        # 1. Temporal alignment (intersection)
         df1[date_col] = pd.to_datetime(df1[date_col], format='%Y-%m-%d')
         df2[date_col] = pd.to_datetime(df2[date_col], format='%Y-%m-%d')
 
@@ -164,43 +161,43 @@ class GNSSCorrelationAnalysis:
                           on=date_col,
                           suffixes=('_1', '_2'))
 
-        # 去除NaN
+        # Remove NaN
         merged = merged.dropna()
         N = len(merged)
 
         if N < 30:
-            print(f"警告: {station1_name}-{station2_name} 共同样本数仅{N}，结果可能不可靠")
+            print(f"Warning: {station1_name}-{station2_name} has only {N} common samples; results may be unreliable")
 
         x = merged[f'{value_col}_1'].values
         y = merged[f'{value_col}_2'].values
 
-        # 去趋势（可选）
+        # Detrend (optional)
         if detrend:
             x = self.detrend_series(x)
             y = self.detrend_series(y)
 
-        # 2. Haversine距离
+        # 2. Haversine distance
         distance_km = self.haversine_distance(lat1, lon1, lat2, lon2)
 
-        # 3. Pearson相关（含经典p值、bootstrap CI、permutation p）
+        # 3. Pearson correlation (with classic p-value, bootstrap CI, permutation p)
         r_pearson, p_classic = stats.pearsonr(x, y)
         r_mean, r_ci_lo, r_ci_hi = self.bootstrap_correlation(x, y)
         p_perm = self.permutation_test(x, y)
 
-        # 4. Spearman相关（鲁棒于异常值）
+        # 4. Spearman correlation (robust to outliers)
         rho_spearman, p_spearman = stats.spearmanr(x, y)
 
-        # 5. 幅值差异指标
+        # 5. Amplitude difference metrics
         bias = np.mean(x - y)
         rmse = np.sqrt(np.mean((x - y) ** 2))
         mae = np.mean(np.abs(x - y))
-        sigma_ratio = np.std(x) / (np.std(y) + 1e-10)  # 避免除零
+        sigma_ratio = np.std(x) / (np.std(y) + 1e-10)  # Avoid division by zero
 
-        # 6. 互相关与滞后
+        # 6. Cross-correlation and lag
         max_lag = min(180, N // 2)
         cc_max, lag_days = self.cross_correlation(x, y, max_lag=max_lag)
 
-        # 返回结果
+        # Return results
         results = {
             'station_i': station1_name,
             'station_j': station2_name,
@@ -227,9 +224,9 @@ class GNSSCorrelationAnalysis:
                                  date_col='YYYYMMDD', value_col='U(m)',
                                  save_path=None):
         """
-        绘制成对站点对比图（时序图+散点图+互相关图）
+        Plot pairwise station comparison (time series + scatter plot + cross-correlation plot)
         """
-        # 时间对齐
+        # Temporal alignment
         df1[date_col] = pd.to_datetime(df1[date_col], format='%Y-%m-%d')
         df2[date_col] = pd.to_datetime(df2[date_col], format='%Y-%m-%d')
         merged = pd.merge(df1[[date_col, value_col]],
@@ -238,7 +235,7 @@ class GNSSCorrelationAnalysis:
 
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-        # 1. 时序对比
+        # 1. Time series comparison
         ax = axes[0, 0]
         ax.plot(merged[date_col], merged[f'{value_col}_1'],
                 label=results['station_i'], alpha=0.7)
@@ -250,13 +247,13 @@ class GNSSCorrelationAnalysis:
         ax.legend()
         ax.grid(True, alpha=0.3)
 
-        # 2. 散点图+回归线
+        # 2. Scatter plot + regression line
         ax = axes[0, 1]
         x = merged[f'{value_col}_1'].values
         y = merged[f'{value_col}_2'].values
         ax.scatter(x, y, alpha=0.5, s=10)
 
-        # 拟合线
+        # Fit line
         z = np.polyfit(x, y, 1)
         p = np.poly1d(z)
         x_line = np.linspace(x.min(), x.max(), 100)
@@ -269,7 +266,7 @@ class GNSSCorrelationAnalysis:
         ax.legend()
         ax.grid(True, alpha=0.3)
 
-        # 3. 互相关图
+        # 3. Cross-correlation plot
         ax = axes[1, 0]
         max_lag = min(180, len(x) // 2)
         x_norm = (x - np.mean(x)) / (np.std(x) * len(x))
@@ -288,7 +285,7 @@ class GNSSCorrelationAnalysis:
         ax.legend()
         ax.grid(True, alpha=0.3)
 
-        # 4. 指标汇总表
+        # 4. Metrics summary table
         ax = axes[1, 1]
         ax.axis('off')
         metrics_text = f"""
@@ -321,7 +318,7 @@ class GNSSCorrelationAnalysis:
 
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"图已保存至: {save_path}")
+            print(f"Figure saved to: {save_path}")
 
         plt.show()
 
@@ -330,33 +327,33 @@ class GNSSCorrelationAnalysis:
                           date_col='YYYYMMDD', value_col='U(m)',
                           detrend=False, min_samples=30):
         """
-        批量分析所有站点对的空间相关性
+        Batch analysis of spatial correlation for all station pairs
 
-        参数:
+        Parameters:
             stations_data: dict, {station_name: DataFrame}
             stations_info: dict, {station_name: {'lat': ..., 'lon': ...}}
-            target_station: str, 如果指定则只分析该站与其他站的关系
-            min_samples: int, 最小共同样本数阈值
+            target_station: str, if specified, only analyze this station against all others
+            min_samples: int, minimum common sample count threshold
 
-        返回: DataFrame，包含所有站点对的指标
+        Returns: DataFrame containing metrics for all station pairs
         """
         results_list = []
 
         station_names = list(stations_data.keys())
 
         if target_station:
-            # 只分析目标站与其他站
+            # Only analyze target station against others
             if target_station not in station_names:
-                raise ValueError(f"目标站点 {target_station} 不在数据中")
+                raise ValueError(f"Target station {target_station} not found in data")
 
             pairs = [(target_station, s) for s in station_names if s != target_station]
-            print(f"分析目标站点 {target_station} 与其他 {len(pairs)} 个站点...")
+            print(f"Analyzing target station {target_station} against {len(pairs)} other stations...")
         else:
-            # 分析所有站点对
+            # Analyze all station pairs
             pairs = [(station_names[i], station_names[j])
                      for i in range(len(station_names))
                      for j in range(i + 1, len(station_names))]
-            print(f"分析所有站点对，共 {len(pairs)} 对...")
+            print(f"Analyzing all station pairs, total: {len(pairs)} pairs...")
 
         for idx, (s1, s2) in enumerate(pairs):
             print(f"  [{idx + 1}/{len(pairs)}] {s1} - {s2}...", end=' ')
@@ -378,15 +375,15 @@ class GNSSCorrelationAnalysis:
                     results_list.append(result)
                     print(f"✓ (N={result['N']}, r={result['pearson_r']:.3f})")
                 else:
-                    print(f"⊗ 样本不足 (N={result['N']} < {min_samples})")
+                    print(f"⊗ Insufficient samples (N={result['N']} < {min_samples})")
 
             except Exception as e:
-                print(f"✗ 错误: {e}")
+                print(f"✗ Error: {e}")
 
         results_df = pd.DataFrame(results_list)
 
         if len(results_df) > 0:
-            # 按相关系数降序排列
+            # Sort by correlation coefficient in descending order
             results_df = results_df.sort_values('pearson_r', ascending=False)
 
         return results_df
@@ -395,24 +392,24 @@ class GNSSCorrelationAnalysis:
                               min_r=0.7, max_distance_km=100,
                               max_p=0.05, min_N=60):
         """
-        根据筛选条件选出最优邻站
+        Select optimal neighboring stations based on filtering criteria
 
-        参数:
-            results_df: analyze_all_pairs返回的DataFrame
-            target_station: 目标站点名
-            min_r: 最小Pearson相关系数
-            max_distance_km: 最大距离（km）
-            max_p: 最大p值（permutation）
-            min_N: 最小样本数
+        Parameters:
+            results_df: DataFrame returned by analyze_all_pairs
+            target_station: Target station name
+            min_r: Minimum Pearson correlation coefficient
+            max_distance_km: Maximum distance (km)
+            max_p: Maximum p-value (permutation)
+            min_N: Minimum sample count
 
-        返回: 筛选后的DataFrame，按综合评分排序
+        Returns: Filtered DataFrame sorted by composite quality score
         """
-        # 筛选与目标站相关的记录
+        # Filter records related to the target station
         mask = (results_df['station_i'] == target_station) | \
                (results_df['station_j'] == target_station)
         df_target = results_df[mask].copy()
 
-        # 应用筛选条件
+        # Apply filtering criteria
         df_filtered = df_target[
             (df_target['pearson_r'] >= min_r) &
             (df_target['distance_km'] <= max_distance_km) &
@@ -420,25 +417,25 @@ class GNSSCorrelationAnalysis:
             (df_target['N'] >= min_N)
             ].copy()
 
-        # 计算综合评分（可调整权重）
-        # 综合评分 = r / (distance + epsilon)，归一化到0-1
-        epsilon = 1.0  # 避免除零
+        # Compute composite quality score (weights adjustable)
+        # Quality score = r / (distance + epsilon), normalized to 0-1
+        epsilon = 1.0  # Avoid division by zero
         df_filtered['quality_score'] = (
                 df_filtered['pearson_r'] / (df_filtered['distance_km'] + epsilon)
         )
 
-        # 按质量评分降序
+        # Sort by quality score in descending order
         df_filtered = df_filtered.sort_values('quality_score', ascending=False)
 
-        print(f"\n目标站点 {target_station} 的邻站筛选结果:")
-        print(f"  筛选条件: r≥{min_r}, d≤{max_distance_km}km, p≤{max_p}, N≥{min_N}")
-        print(f"  符合条件的邻站数: {len(df_filtered)}")
+        print(f"\nNeighbor selection results for target station {target_station}:")
+        print(f"  Filter criteria: r>={min_r}, d<={max_distance_km}km, p<={max_p}, N>={min_N}")
+        print(f"  Number of qualifying neighbors: {len(df_filtered)}")
 
         return df_filtered
 
     def plot_correlation_heatmap(self, results_df, save_path=None):
-        """绘制相关系数热图矩阵"""
-        # 构建相关矩阵
+        """Plot correlation coefficient heatmap matrix"""
+        # Build correlation matrix
         stations = sorted(list(set(results_df['station_i'].tolist() +
                                    results_df['station_j'].tolist())))
         n = len(stations)
@@ -450,7 +447,7 @@ class GNSSCorrelationAnalysis:
             corr_matrix[i, j] = row['pearson_r']
             corr_matrix[j, i] = row['pearson_r']
 
-        # 绘图
+        # Plot
         plt.figure(figsize=(10, 8))
         sns.heatmap(corr_matrix, annot=True, fmt='.3f',
                     xticklabels=stations, yticklabels=stations,
@@ -461,12 +458,12 @@ class GNSSCorrelationAnalysis:
 
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"热图已保存至: {save_path}")
+            print(f"Heatmap saved to: {save_path}")
         plt.show()
 
     def plot_distance_vs_correlation(self, results_df, target_station=None,
                                      save_path=None):
-        """绘制距离-相关性散点图"""
+        """Plot distance vs. correlation scatter plot"""
         df_plot = results_df.copy()
 
         if target_station:
@@ -476,12 +473,12 @@ class GNSSCorrelationAnalysis:
 
         plt.figure(figsize=(10, 6))
 
-        # 散点图，按p值着色
+        # Scatter plot colored by p-value
         scatter = plt.scatter(df_plot['distance_km'], df_plot['pearson_r'],
                               c=df_plot['p_permutation'], cmap='RdYlGn_r',
                               s=100, alpha=0.6, edgecolors='black', linewidth=0.5)
 
-        # 添加站点标签
+        # Add station labels
         for _, row in df_plot.iterrows():
             neighbor = row['station_j'] if row['station_i'] == target_station else row['station_i']
             plt.annotate(neighbor,
@@ -504,19 +501,18 @@ class GNSSCorrelationAnalysis:
 
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"散点图已保存至: {save_path}")
+            print(f"Scatter plot saved to: {save_path}")
         plt.show()
 
 
-# ==================== 使用示例 ====================
+# ==================== Usage Examples ====================
 
 def example_usage_single_pair():
-    
+    """Example 1: Single station pair analysis"""
     analyzer = GNSSCorrelationAnalysis(nboot=2000, nperm=2000)
 
-    df_ynys = pd.read_csv(os.path.join(DATA_DIR, "GSAX.csv"))
-    df_ynmh = pd.read_csv(os.path.join(DATA_DIR, "GSDH.csv"))
-
+    df_ynys = pd.read_csv('D:/Grade 1/GNSS-LSTM+Attention+SG/Spatial Correlation - Machine Learning/GSAX/GSAX.csv')
+    df_ynmh = pd.read_csv('D:/Grade 1/GNSS-LSTM+Attention+SG/Spatial Correlation - Machine Learning/GSAX/GSDH.csv')
 
     stations_info = {
         'GSAX': {'lat': 40.52, 'lon': 95.76},
@@ -537,110 +533,128 @@ def example_usage_single_pair():
     print(f"Pearson r: {results['pearson_r']:.4f}")
     print(f"p-value: {results['p_permutation']:.4f}")
 
-    # 添加可视化
-    print("\n生成可视化图表...")
+    # Generate visualization
+    print("\nGenerating visualization charts...")
     analyzer.plot_pairwise_comparison(
         df_ynys, df_ynmh, results,
         date_col='YYYYMMDD', value_col='U(m)',
         save_path='GSAX_GSDH_comparison.png'
     )
 
+    # Print detailed results
+    print("\n" + "=" * 50)
+    print("Detailed Analysis Results:")
+    print("=" * 50)
+    print(f"Station pair: {results['station_i']} - {results['station_j']}")
+    print(f"Common sample count: {results['N']}")
+    print(f"Distance: {results['distance_km']:.2f} km")
+    print(f"Pearson correlation coefficient: {results['pearson_r']:.4f}")
+    print(f"95% confidence interval: [{results['r_ci_lower']:.4f}, {results['r_ci_upper']:.4f}]")
+    print(f"Classic p-value: {results['pearson_p_classic']:.4e}")
+    print(f"Permutation test p-value: {results['p_permutation']:.4f}")
+    print(f"Spearman correlation coefficient: {results['spearman_rho']:.4f}")
+    print(f"Bias: {results['bias']:.4f} mm")
+    print(f"Root Mean Square Error (RMSE): {results['rmse']:.4f} mm")
+    print(f"Mean Absolute Error (MAE): {results['mae']:.4f} mm")
+    print(f"Standard deviation ratio: {results['sigma_ratio']:.4f}")
+    print(f"Maximum cross-correlation coefficient: {results['cc_max']:.4f}")
+    print(f"Lag at maximum cross-correlation: {results['lag_days']} days")
 
     return results
 
 
 def example_usage_multi_stations():
     """
-    多站点批量分析 + 自动筛选最优邻站
+    Example 2: Multi-station batch analysis + automatic best neighbor selection
 
-    数据准备:
-    1. 将所有站点数据放在同一目录
-    2. 准备站点信息表
+    Data preparation:
+    1. Place all station data in the same directory, named e.g.: YNYS.csv, YNMH.csv, ...
+    2. Prepare station info table: stations_info.csv (columns: station, lat, lon)
     """
 
-    # === 步骤1: 加载所有站点数据 ===
+    # === Step 1: Load all station data ===
     import glob
 
-    # 自动读取所有CSV文件
-    data_files = glob.glob('csv/*.csv')  # 修改为csv文件夹路径
+    # Automatically read all CSV files
+    data_files = glob.glob('csv/*.csv')  # Update to your csv folder path
     stations_data = {}
 
     for file in data_files:
         station_name = file.replace('.csv', '').split('/')[-1]
-        if station_name != 'stations_info':  # 排除元信息文件
+        if station_name != 'stations_info':  # Exclude metadata file
             df = pd.read_csv(file)
-            # 检查是否包含所需的列
+            # Check for required columns
             if 'YYYYMMDD' in df.columns and 'U(m)' in df.columns:
                 stations_data[station_name] = df
             else:
-                print(f"警告: {file} 缺少YYYYMMDD或U(m)列")
+                print(f"Warning: {file} is missing YYYYMMDD or U(m) column")
 
-    # 站点元信息（经纬度）
+    # Station metadata (lat/lon)
     stations_info = {
         'YNYS': {'lat': 26.68, 'lon': 100.75},
         'YNLJ': {'lat': 26.7, 'lon': 100.03},
     }
 
-    # === 步骤2: 初始化分析器 ===
+    # === Step 2: Initialize analyzer ===
     analyzer = GNSSCorrelationAnalysis(nboot=2000, nperm=2000)
 
-    # === 步骤3: 批量分析（以YNYS为目标站） ===
+    # === Step 3: Batch analysis (with YNYS as target station) ===
     print("\n" + "=" * 60)
-    print("开始批量分析...")
+    print("Starting batch analysis...")
     print("=" * 60)
 
     results_df = analyzer.analyze_all_pairs(
         stations_data=stations_data,
         stations_info=stations_info,
-        target_station='YNYS',  # 只分析YNYS与其他站的关系
+        target_station='YNYS',  # Only analyze YNYS against other stations
         date_col='YYYYMMDD',
         value_col='U(m)',
         detrend=False,
         min_samples=30
     )
 
-    # === 步骤4: 保存完整结果 ===
+    # === Step 4: Save complete results ===
     results_df.to_csv('pairwise_metrics_all.csv', index=False)
-    print(f"\n完整结果已保存至: pairwise_metrics_all.csv")
+    print(f"\nComplete results saved to: pairwise_metrics_all.csv")
 
-    # === 步骤5: 筛选最优邻站 ===
+    # === Step 5: Select best neighboring stations ===
     print("\n" + "=" * 60)
-    print("筛选最优邻站...")
+    print("Selecting best neighboring stations...")
     print("=" * 60)
 
     best_neighbors = analyzer.select_best_neighbors(
         results_df=results_df,
         target_station='YNYS',
-        min_r=0.6,  # 相关系数≥0.6
-        max_distance_km=100,  # 距离≤100km
-        max_p=0.05,  # p值≤0.05
-        min_N=60  # 样本数≥60
+        min_r=0.6,          # Correlation coefficient >= 0.6
+        max_distance_km=100, # Distance <= 100 km
+        max_p=0.05,          # p-value <= 0.05
+        min_N=60             # Sample count >= 60
     )
 
-    # 显示前5名
-    print("\n前5名最优邻站:")
+    # Display top 5
+    print("\nTop 5 best neighboring stations:")
     print(best_neighbors[['station_j', 'distance_km', 'pearson_r',
                           'p_permutation', 'N', 'quality_score']].head(5))
 
-    # 保存筛选结果
+    # Save filtered results
     best_neighbors.to_csv('best_neighbors_YNYS.csv', index=False)
-    print(f"\n最优邻站列表已保存至: best_neighbors_YNYS.csv")
+    print(f"\nBest neighbor list saved to: best_neighbors_YNYS.csv")
 
-    # === 步骤6: 可视化 ===
-    # 6.1 相关系数热图
+    # === Step 6: Visualization ===
+    # 6.1 Correlation heatmap
     analyzer.plot_correlation_heatmap(
         results_df,
         save_path='correlation_heatmap.png'
     )
 
-    # 6.2 距离-相关性散点图
+    # 6.2 Distance vs. correlation scatter plot
     analyzer.plot_distance_vs_correlation(
         results_df,
         target_station='YNYS',
         save_path='distance_vs_correlation_YNYS.png'
     )
 
-    # 6.3 详细对比图（选最优的一对）
+    # 6.3 Detailed comparison plot (best pair)
     if len(best_neighbors) > 0:
         best_neighbor = best_neighbors.iloc[0]
         neighbor_name = best_neighbor['station_j']
@@ -656,28 +670,32 @@ def example_usage_multi_stations():
 
     return results_df, best_neighbors
 
+
 if __name__ == "__main__":
     print("=" * 60)
-    print("GNSS空间相关性分析工具")
+    print("GNSS Spatial Correlation Analysis Tool")
     print("=" * 60)
+
+    choice = input("\nSelect analysis mode:\n  [1] Single station pair analysis\n  [2] Multi-station batch analysis\nEnter choice (1 or 2): ").strip()
+
     if choice == "1":
-        print("\n开始单对站点分析...")
+        print("\nStarting single station pair analysis...")
         results = example_usage_single_pair()
-        print(f"\n分析完成！Pearson r: {results['pearson_r']:.4f}")
+        print(f"\nAnalysis complete! Pearson r: {results['pearson_r']:.4f}")
 
     elif choice == "2":
-        print("\n开始多站点批量分析...")
+        print("\nStarting multi-station batch analysis...")
         results_df, best_neighbors = example_usage_multi_stations()
         if len(results_df) > 0:
-            print(f"\n批量分析完成！共分析 {len(results_df)} 对站点")
+            print(f"\nBatch analysis complete! Analyzed {len(results_df)} station pairs")
             if len(best_neighbors) > 0:
-                print(f"找到 {len(best_neighbors)} 个符合条件的邻站")
+                print(f"Found {len(best_neighbors)} qualifying neighboring stations")
             else:
-                print("未找到符合条件的邻站")
+                print("No qualifying neighboring stations found")
         else:
-            print("批量分析完成，但未找到有效的站点对")
+            print("Batch analysis complete, but no valid station pairs were found")
 
     else:
-        print("无效选择，请重新运行并输入 1 或 2")
+        print("Invalid choice. Please re-run and enter 1 or 2")
 
     print("=" * 60)
