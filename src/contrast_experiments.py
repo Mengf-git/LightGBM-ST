@@ -1,10 +1,12 @@
 """
-GNSS时间序列缺失值插补对比实验
+GNSS Time Series Missing Value Imputation - LightGBM + Traditional Interpolation Method Comparison
 ===========================================================
-1. 集成Akima、KNN、随机森林、三次样条插值方法
-2. 生成可视化对比图，可视化缺失和插值
-3. 完整的方法性能对比实验
+New Features:
+1. Integration of Akima, KNN, Random Forest, and Cubic Spline interpolation methods
+2. SCI paper-standard visualization comparison figures with missing value and imputation display
+3. Complete method performance comparison experiments
 """
+
 import os
 import pandas as pd
 import numpy as np
@@ -24,6 +26,9 @@ import json
 
 warnings.filterwarnings("ignore")
 
+# ----------------------
+# SCI Paper Standard Font Settings
+# ----------------------
 rcParams['font.family'] = ['Arial', 'Times New Roman']
 rcParams['axes.unicode_minus'] = False
 rcParams['font.size'] = 10
@@ -35,22 +40,22 @@ rcParams['ytick.labelsize'] = 10
 rcParams['figure.titlesize'] = 13
 rcParams['figure.dpi'] = 300
 
-# 设置颜色方案
+# Color scheme (colorblind-friendly)
 COLOR_SCHEME = {
-    'lgbm_full': '#1f77b4',  # 蓝色
-    'akima': '#ff7f0e',  # 橙色
-    'cubic_spline': '#2ca02c',  # 绿色
-    'knn': '#d62728',  # 红色
-    'rf': '#9467bd',  # 紫色
-    'lgbm_no_spatial': '#8c564b',  # 棕色
-    'time_only': '#e377c2',  # 粉色
-    'linear': '#7f7f7f'  # 灰色
+    'lgbm_full': '#1f77b4',      # Blue
+    'akima': '#ff7f0e',           # Orange
+    'cubic_spline': '#2ca02c',    # Green
+    'knn': '#d62728',             # Red
+    'rf': '#9467bd',              # Purple
+    'lgbm_no_spatial': '#8c564b', # Brown
+    'time_only': '#e377c2',       # Pink
+    'linear': '#7f7f7f'           # Gray
 }
 
 # =====================================================================
-# 核心配置参数
+# Core Configuration Parameters
 # =====================================================================
-FOLDER = "../data/real_GNSS"
+FOLDER = "D:/Grade 1/GNSS-LSTM+Attention+SG/Spatial Correlation - Machine Learning/YNYS"
 TARGET_STATION = "YNYS"
 NEIGHBOR_STATION = "YNLJ"
 TIME_COL = "YYYYMMDD"
@@ -58,16 +63,19 @@ VALUE_COL = "U(m)"
 START_DATE = "2011-12-05"
 END_DATE = "2019-02-17"
 N_REPEATS = 10
-N_BOOTSTRAP = 80
+N_BOOTSTRAP = 50
 RANDOM_SEED = 42
+CORRELATION_R = 0.8236
+NEIGHBOR_DIST_KM = 71.56
+BIAS_VALUE = -2.6672
 
 LGBM_PARAMS = {
     'objective': 'regression',
     'metric': 'mae',
-    'learning_rate': 0.01,
-    'num_leaves': 40,
-    'max_depth': 8,
-    'n_estimators': 1000,
+    'learning_rate': 0.03,
+    'num_leaves': 31,
+    'max_depth': 6,
+    'n_estimators': 2000,
     'feature_fraction': 0.8,
     'bagging_fraction': 0.8,
     'bagging_freq': 5,
@@ -79,14 +87,14 @@ LGBM_PARAMS = {
 
 
 # =====================================================================
-# 传统插值方法类
+# Traditional Interpolation Methods Class
 # =====================================================================
 class TraditionalInterpolationMethods:
-    """集成传统插值方法"""
+    """Integration of traditional interpolation methods"""
 
     @staticmethod
     def cubic_spline_interpolation(series):
-        """三次样条插值"""
+        """Cubic spline interpolation"""
         try:
             valid_mask = ~series.isna()
             x_valid = np.where(valid_mask)[0]
@@ -104,12 +112,12 @@ class TraditionalInterpolationMethods:
             return result
 
         except Exception as e:
-            print(f"    [警告] 三次样条插值失败: {e}")
+            print(f"    [Warning] Cubic spline interpolation failed: {e}")
             return series.interpolate(method='linear').bfill().ffill()
 
     @staticmethod
     def akima_interpolation(series):
-        """Akima插值"""
+        """Akima interpolation"""
         try:
             from scipy.interpolate import Akima1DInterpolator
 
@@ -129,18 +137,18 @@ class TraditionalInterpolationMethods:
             return result
 
         except Exception as e:
-            print(f"    [警告] Akima插值失败: {e}")
+            print(f"    [Warning] Akima interpolation failed: {e}")
             return TraditionalInterpolationMethods.cubic_spline_interpolation(series)
 
     @staticmethod
     def _create_lagged_features(series, n_lags=30, n_rolling_stats=3):
-        """为时间序列创建滞后特征和滚动统计特征"""
+        """Create lagged features and rolling statistics features for a time series"""
         n = len(series)
         features = np.zeros((n, n_lags + n_rolling_stats * 4))
 
         series_filled = series.fillna(method='ffill').fillna(method='bfill')
 
-        # 滞后特征
+        # Lagged features
         for lag in range(n_lags):
             if lag == 0:
                 features[:, lag] = series_filled.values
@@ -148,7 +156,7 @@ class TraditionalInterpolationMethods:
                 features[lag:, lag] = series_filled.iloc[:-lag].values
                 features[:lag, lag] = series_filled.iloc[0]
 
-        # 滚动统计特征
+        # Rolling statistics features
         col_idx = n_lags
         for window in range(1, n_rolling_stats + 1):
             window_size = max(2, (window + 1) * 3)
@@ -174,7 +182,7 @@ class TraditionalInterpolationMethods:
 
     @staticmethod
     def knn_interpolation(series, n_neighbors=5, n_lags=30, n_rolling_stats=3):
-        """KNN插值"""
+        """KNN interpolation"""
         try:
             valid_mask = ~series.isna()
             missing_mask = series.isna()
@@ -203,13 +211,13 @@ class TraditionalInterpolationMethods:
             return filled_series
 
         except Exception as e:
-            print(f"    [警告] KNN插值失败: {e}")
+            print(f"    [Warning] KNN interpolation failed: {e}")
             return series.interpolate(method='linear').bfill().ffill()
 
     @staticmethod
     def random_forest_interpolation(series, n_estimators=100, max_depth=10,
                                     min_samples_leaf=2, n_iterations=10):
-        """随机森林迭代插值"""
+        """Random forest iterative interpolation"""
         try:
             series_filled = series.copy()
             mask_valid = ~series.isna()
@@ -248,16 +256,20 @@ class TraditionalInterpolationMethods:
             return series_filled
 
         except Exception as e:
-            print(f"    [警告] 随机森林插值失败: {e}")
+            print(f"    [Warning] Random forest interpolation failed: {e}")
             return series.interpolate(method='linear').bfill().ffill()
 
 
 # =====================================================================
+# [All original classes are retained; only new classes are added here]
+# =====================================================================
 
 class SpatialCorrelationFeatureEngineering:
-    """空间相关性特征工程类"""
+    """Spatial correlation feature engineering class"""
 
     def __init__(self, correlation_r, neighbor_dist_km, bias_value):
+        self.correlation_r = correlation_r
+        self.neighbor_dist_km = neighbor_dist_km
         self.bias_value = bias_value
         self.ols_model = None
         self.base_model = None
@@ -268,7 +280,7 @@ class SpatialCorrelationFeatureEngineering:
         valid_mask = target_series.notna() & neighbor_series.notna()
 
         if valid_mask.sum() < 30:
-            print("    [警告] 训练样本不足,使用默认参数")
+            print("    [Warning] Insufficient training samples, using default parameters")
             self.ols_model = {'intercept': 0.0, 'coef': 1.0}
             return
 
@@ -283,11 +295,13 @@ class SpatialCorrelationFeatureEngineering:
             'coef': lr.coef_[0]
         }
 
-        print(f"    ✓ Bias校正: U_target = {lr.intercept_:.4f} + {lr.coef_[0]:.4f} * U_neighbor")
+        print(f"    ✓ Bias correction: U_target = {lr.intercept_:.4f} + {lr.coef_[0]:.4f} * U_neighbor")
 
     def apply_bias_correction(self, neighbor_series):
         if self.ols_model is None:
             return neighbor_series.copy()
+
+        return self.ols_model['intercept'] + self.ols_model['coef'] * neighbor_series
 
     def create_features(self, target_series, neighbor_series,
                         n_lags=7, rolling_windows=[3, 7, 14],
@@ -300,6 +314,7 @@ class SpatialCorrelationFeatureEngineering:
         df['doy_sin'] = np.sin(2 * np.pi * df.index.dayofyear / 365.25)
         df['doy_cos'] = np.cos(2 * np.pi * df.index.dayofyear / 365.25)
         df['month_norm'] = df.index.month / 12.0
+        years = pd.Series(df.index.year)
         df['year_norm'] = (years - years.mean()) / years.std()
 
         for lag in range(n_lags + 1):
@@ -348,7 +363,7 @@ class SpatialCorrelationFeatureEngineering:
 
 
 class LightGBMSpatialInterpolator:
-    """基于LightGBM的空间相关性插值器"""
+    """LightGBM-based spatial correlation interpolator"""
 
     def __init__(self, feature_engineer, lgbm_params=None):
         self.feature_engineer = feature_engineer
@@ -363,7 +378,7 @@ class LightGBMSpatialInterpolator:
         train_df = train_df.dropna(subset=['target'])
 
         if len(train_df) < 50:
-            raise ValueError(f"训练样本不足: {len(train_df)}")
+            raise ValueError(f"Insufficient training samples: {len(train_df)}")
 
         X = train_df.drop(columns=['target', 'neighbor'], errors='ignore')
         y = train_df['target']
@@ -374,7 +389,7 @@ class LightGBMSpatialInterpolator:
         return X, y
 
     def train_ensemble_residual(self, df_features, train_idx, n_bootstrap=50):
-        print(f"    训练残差Bootstrap集成...")
+        print(f"    Training residual bootstrap ensemble...")
 
         X_full, y_full = self._prepare_train_data(df_features, train_idx)
 
@@ -398,9 +413,9 @@ class LightGBMSpatialInterpolator:
         y_pred_val = base_model.predict(X_val)
         val_mae = mean_absolute_error(y_val, y_pred_val)
 
-        print(f"    ✓ 基础模型训练完成")
-        print(f"    ✓ 训练集残差标准差: {residual_std:.4f} mm")
-        print(f"    ✓ 验证集MAE: {val_mae:.4f} mm")
+        print(f"    ✓ Base model training complete")
+        print(f"    ✓ Training set residual std: {residual_std:.4f} mm")
+        print(f"    ✓ Validation set MAE: {val_mae:.4f} mm")
 
         self.base_model = base_model
         self.residual_std = residual_std
@@ -422,7 +437,7 @@ class LightGBMSpatialInterpolator:
 
 
 class BaselineInterpolators:
-    """基线插值方法"""
+    """Baseline interpolation methods"""
 
     @staticmethod
     def time_only_baseline(df_features, train_idx, test_idx):
@@ -456,9 +471,14 @@ class BaselineInterpolators:
 
 
 def create_continuous_missing(data, n_segments, days_per_segment, seed=None):
-    """创建连续缺失段"""
+    """Create continuous missing segments"""
     if seed is not None:
         np.random.seed(seed)
+
+    masked_data = data.copy()
+    missing_indices = []
+    n_total = len(data)
+    used_ranges = []
 
     required_space = n_segments * (days_per_segment + 10)
     if required_space > n_total:
@@ -488,9 +508,8 @@ def create_continuous_missing(data, n_segments, days_per_segment, seed=None):
     masked_data.iloc[missing_indices] = np.nan
     return masked_data, sorted(list(set(missing_indices))), segments_created
 
-
 def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segment=30, seed=None):
-    """创建随机聚集缺失"""
+    """Create randomly clustered missing segments"""
     if seed is not None:
         np.random.seed(seed)
 
@@ -498,6 +517,11 @@ def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segm
     n_missing = int(n_total * missing_ratio)
     masked_data = data.copy()
     missing_indices = []
+
+    current_pos = 0
+    max_attempts = 1000
+    attempts = 0
+
     while len(missing_indices) < n_missing and current_pos < n_total and attempts < max_attempts:
         attempts += 1
 
@@ -546,7 +570,7 @@ def create_random_clustered_missing(data, missing_ratio, min_segment=5, max_segm
 
 
 def calculate_metrics_with_ci(true_values, predicted_values, pred_lower, pred_upper, missing_indices):
-    """计算评估指标 + CI覆盖率"""
+    """Calculate evaluation metrics + CI coverage rate"""
     if isinstance(missing_indices, pd.DatetimeIndex):
         valid_indices = missing_indices
     else:
@@ -603,20 +627,20 @@ def run_comprehensive_experiments(target_data, neighbor_data,
                                   missing_days_list, missing_ratios,
                                   output_folder):
     """
-    运行完整的对比实验（包含传统插值方法）
+    Run complete comparison experiments (including traditional interpolation methods)
     """
     print("\n" + "=" * 80)
-    print("🚀 LightGBM + 传统插值方法综合对比实验")
+    print("🚀 LightGBM + Traditional Interpolation Methods Comprehensive Comparison Experiment")
     print("=" * 80)
 
-    # 初始化特征工程
+    # Initialize feature engineering
     feature_engineer = SpatialCorrelationFeatureEngineering(
         correlation_r=CORRELATION_R,
         neighbor_dist_km=NEIGHBOR_DIST_KM,
         bias_value=BIAS_VALUE
     )
 
-    # 准备数据索引
+    # Prepare data indices
     total_length = len(target_data)
     train_end = int(0.6 * total_length)
     val_end = int(0.8 * total_length)
@@ -625,13 +649,13 @@ def run_comprehensive_experiments(target_data, neighbor_data,
     val_idx = target_data.index[train_end:val_end]
     test_idx = target_data.index[val_end:]
 
-    print(f"\n数据划分:")
-    print(f"  Train: {len(train_idx)} 天")
-    print(f"  Val:   {len(val_idx)} 天")
-    print(f"  Test:  {len(test_idx)} 天")
+    print(f"\nData split:")
+    print(f"  Train: {len(train_idx)} days")
+    print(f"  Val:   {len(val_idx)} days")
+    print(f"  Test:  {len(test_idx)} days")
 
-    # 拟合Bias校正
-    print("\n拟合Bias校正模型...")
+    # Fit bias correction model
+    print("\nFitting bias correction model...")
     feature_engineer.fit_bias_correction(
         target_data.loc[train_idx.union(val_idx)],
         neighbor_data.loc[train_idx.union(val_idx)]
@@ -640,15 +664,15 @@ def run_comprehensive_experiments(target_data, neighbor_data,
     results_list = []
 
     # ====================================================================
-    # 实验1: 连续缺失
+    # Experiment 1: Continuous missing segments
     # ====================================================================
     print("\n" + "=" * 80)
-    print("🔴 实验1: 连续缺失段")
+    print("🔴 Experiment 1: Continuous Missing Segments")
     print("=" * 80)
 
     for missing_days in missing_days_list:
         print(f"\n{'─' * 80}")
-        print(f"缺失段长度: {missing_days} 天")
+        print(f"Missing segment length: {missing_days} days")
         print(f"{'─' * 80}")
 
         method_results = {
@@ -661,11 +685,11 @@ def run_comprehensive_experiments(target_data, neighbor_data,
         }
 
         for repeat in range(N_REPEATS):
-            print(f"\n  重复 {repeat + 1}/{N_REPEATS}")
+            print(f"\n  Repeat {repeat + 1}/{N_REPEATS}")
 
             seed = RANDOM_SEED + repeat
 
-            # 创建缺失
+            # Create missing data
             test_data = target_data.loc[test_idx].copy()
             n_segments = max(1, int(len(test_idx) * 0.1 / missing_days))
 
@@ -678,7 +702,7 @@ def run_comprehensive_experiments(target_data, neighbor_data,
             full_target = target_data.copy()
             full_target.loc[missing_indices_global] = np.nan
 
-            # === LightGBM-ST方法 ===
+            # === LightGBM-ST method ===
             df_features = feature_engineer.create_features(
                 full_target, neighbor_data,
                 n_lags=7, rolling_windows=[3, 7, 14],
@@ -700,7 +724,7 @@ def run_comprehensive_experiments(target_data, neighbor_data,
             method_results['lgbm_full']['corr'].append(metrics['correlation'])
             method_results['lgbm_full']['ci_cov'].append(metrics['ci_coverage'])
 
-            # === Akima插值 ===
+            # === Akima interpolation ===
             pred_akima = TraditionalInterpolationMethods.akima_interpolation(full_target)
             metrics_akima = calculate_metrics_with_ci(
                 target_data, pred_akima, None, None, missing_indices_global
@@ -709,7 +733,7 @@ def run_comprehensive_experiments(target_data, neighbor_data,
             method_results['akima']['mae'].append(metrics_akima['mae'])
             method_results['akima']['corr'].append(metrics_akima['correlation'])
 
-            # === 三次样条插值 ===
+            # === Cubic spline interpolation ===
             pred_cubic = TraditionalInterpolationMethods.cubic_spline_interpolation(full_target)
             metrics_cubic = calculate_metrics_with_ci(
                 target_data, pred_cubic, None, None, missing_indices_global
@@ -718,7 +742,7 @@ def run_comprehensive_experiments(target_data, neighbor_data,
             method_results['cubic_spline']['mae'].append(metrics_cubic['mae'])
             method_results['cubic_spline']['corr'].append(metrics_cubic['correlation'])
 
-            # === KNN插值 ===
+            # === KNN interpolation ===
             pred_knn = TraditionalInterpolationMethods.knn_interpolation(full_target)
             metrics_knn = calculate_metrics_with_ci(
                 target_data, pred_knn, None, None, missing_indices_global
@@ -727,7 +751,7 @@ def run_comprehensive_experiments(target_data, neighbor_data,
             method_results['knn']['mae'].append(metrics_knn['mae'])
             method_results['knn']['corr'].append(metrics_knn['correlation'])
 
-            # === 随机森林插值 ===
+            # === Random forest interpolation ===
             pred_rf = TraditionalInterpolationMethods.random_forest_interpolation(full_target)
             metrics_rf = calculate_metrics_with_ci(
                 target_data, pred_rf, None, None, missing_indices_global
@@ -736,7 +760,7 @@ def run_comprehensive_experiments(target_data, neighbor_data,
             method_results['rf']['mae'].append(metrics_rf['mae'])
             method_results['rf']['corr'].append(metrics_rf['correlation'])
 
-            # === 线性插值 ===
+            # === Linear interpolation ===
             pred_linear = BaselineInterpolators.linear_interpolation(
                 full_target, missing_indices_global
             )
@@ -754,7 +778,7 @@ def run_comprehensive_experiments(target_data, neighbor_data,
             print(f"    ✓ RF: RMSE={metrics_rf['rmse']:.4f}")
             print(f"    ✓ Linear: RMSE={metrics_linear['rmse']:.4f}")
 
-        # 汇总结果
+        # Summarize results
         for method_name, method_data in method_results.items():
             if len(method_data['rmse']) > 0:
                 results_list.append({
@@ -773,15 +797,15 @@ def run_comprehensive_experiments(target_data, neighbor_data,
                 })
 
     # ====================================================================
-    # 实验2: 随机聚集缺失
+    # Experiment 2: Random clustered missing
     # ====================================================================
     print("\n" + "=" * 80)
-    print("🔵 实验2: 随机聚集缺失")
+    print("🔵 Experiment 2: Random Clustered Missing")
     print("=" * 80)
 
     for missing_ratio in missing_ratios:
         print(f"\n{'─' * 80}")
-        print(f"缺失比例: {missing_ratio * 100:.1f}%")
+        print(f"Missing ratio: {missing_ratio * 100:.1f}%")
         print(f"{'─' * 80}")
 
         method_results = {
@@ -794,7 +818,7 @@ def run_comprehensive_experiments(target_data, neighbor_data,
         }
 
         for repeat in range(N_REPEATS):
-            print(f"\n  重复 {repeat + 1}/{N_REPEATS}")
+            print(f"\n  Repeat {repeat + 1}/{N_REPEATS}")
 
             seed = RANDOM_SEED + repeat
 
@@ -831,7 +855,7 @@ def run_comprehensive_experiments(target_data, neighbor_data,
             method_results['lgbm_full']['corr'].append(metrics['correlation'])
             method_results['lgbm_full']['ci_cov'].append(metrics['ci_coverage'])
 
-            # === 传统方法 ===
+            # === Traditional methods ===
             pred_akima = TraditionalInterpolationMethods.akima_interpolation(full_target)
             metrics_akima = calculate_metrics_with_ci(target_data, pred_akima, None, None, missing_indices_global)
             method_results['akima']['rmse'].append(metrics_akima['rmse'])
@@ -864,7 +888,7 @@ def run_comprehensive_experiments(target_data, neighbor_data,
 
             print(f"    ✓ LightGBM-ST: RMSE={metrics['rmse']:.4f}")
 
-        # 汇总结果
+        # Summarize results
         for method_name, method_data in method_results.items():
             if len(method_data['rmse']) > 0:
                 results_list.append({
@@ -882,11 +906,11 @@ def run_comprehensive_experiments(target_data, neighbor_data,
                     'n_repeats': N_REPEATS
                 })
 
-    # 保存结果
+    # Save results
     results_df = pd.DataFrame(results_list)
     results_path = os.path.join(output_folder, 'comprehensive_results.csv')
     results_df.to_csv(results_path, index=False, encoding='utf-8-sig')
-    print(f"\n✓ 结果已保存: {results_path}")
+    print(f"\n✓ Results saved to: {results_path}")
 
     return results_df, interpolator
 
@@ -894,14 +918,14 @@ def run_comprehensive_experiments(target_data, neighbor_data,
 def plot_interpolation_comparison_figures(target_data, neighbor_data, feature_engineer,
                                           missing_days_list, missing_ratios, output_folder):
     """
-    生成真实值vs预测值的插补效果对比图
-    专注于展示各方法的实际插补效果
+    Generate true value vs predicted value interpolation effect comparison figures,
+    focused on displaying the actual imputation performance of each method
     """
     print("\n" + "=" * 80)
-    print("📊 生成插补效果可视化对比图")
+    print("📊 Generating Interpolation Effect Visualization Comparison Figures")
     print("=" * 80)
 
-    # 定义方法显示名称
+    # Define method display names
     method_names = {
         'lgbm_full': 'LightGBM-ST',
         'akima': 'Akima',
@@ -911,7 +935,7 @@ def plot_interpolation_comparison_figures(target_data, neighbor_data, feature_en
         'linear': 'Linear'
     }
 
-    # 准备数据索引
+    # Prepare data indices
     total_length = len(target_data)
     train_end = int(0.6 * total_length)
     val_end = int(0.8 * total_length)
@@ -920,19 +944,19 @@ def plot_interpolation_comparison_figures(target_data, neighbor_data, feature_en
     test_idx = target_data.index[val_end:]
 
     # ====================================================================
-    # 图1: 连续缺失场景 - 不同缺失长度的插补效果对比
+    # Figure 1: Continuous missing scenario - interpolation effect comparison across missing lengths
     # ====================================================================
-    print("\n生成连续缺失场景插补效果图...")
+    print("\nGenerating continuous missing scenario interpolation effect figures...")
 
-    # 选择代表性的缺失天数
+    # Select representative missing day counts
     selected_days = [7, 30, 90] if 90 in missing_days_list else [7, 30]
 
     for missing_days in selected_days:
-        print(f"  处理 {missing_days} 天缺失场景...")
+        print(f"  Processing {missing_days}-day missing scenario...")
 
-        # 创建缺失数据（使用固定种子以保证可重复性）
+        # Create missing data (fixed seed for reproducibility)
         test_data = target_data.loc[test_idx].copy()
-        n_segments = 1  # 只创建一个缺失段用于可视化
+        n_segments = 1  # Create only one missing segment for visualization
 
         masked_test, missing_indices_local, _ = create_continuous_missing(
             test_data, n_segments, missing_days, seed=RANDOM_SEED
@@ -940,18 +964,18 @@ def plot_interpolation_comparison_figures(target_data, neighbor_data, feature_en
 
         missing_indices_global = test_idx[missing_indices_local]
 
-        # 构建完整数据
+        # Build full data with missing values
         full_target = target_data.copy()
         full_target.loc[missing_indices_global] = np.nan
 
-        # 准备特征
+        # Prepare features
         df_features = feature_engineer.create_features(
             full_target, neighbor_data,
             n_lags=7, rolling_windows=[3, 7, 14],
             include_target_lags=True, use_neighbor_lag0=False
         )
 
-        # === 执行各种插值方法 ===
+        # === Run each interpolation method ===
         predictions = {}
 
         # LightGBM-ST
@@ -960,35 +984,35 @@ def plot_interpolation_comparison_figures(target_data, neighbor_data, feature_en
         pred_lgbm, _, _ = interpolator.predict_with_uncertainty_residual(df_features, missing_indices_global)
         predictions['lgbm_full'] = pred_lgbm
 
-        # Akima插值
+        # Akima interpolation
         pred_akima = TraditionalInterpolationMethods.akima_interpolation(full_target)
         predictions['akima'] = pred_akima.loc[missing_indices_global].values
 
-        # 三次样条插值
+        # Cubic spline interpolation
         pred_cubic = TraditionalInterpolationMethods.cubic_spline_interpolation(full_target)
         predictions['cubic_spline'] = pred_cubic.loc[missing_indices_global].values
 
-        # KNN插值
+        # KNN interpolation
         pred_knn = TraditionalInterpolationMethods.knn_interpolation(full_target)
         predictions['knn'] = pred_knn.loc[missing_indices_global].values
 
-        # 随机森林插值
+        # Random forest interpolation
         pred_rf = TraditionalInterpolationMethods.random_forest_interpolation(full_target)
         predictions['rf'] = pred_rf.loc[missing_indices_global].values
 
-        # 线性插值
+        # Linear interpolation
         pred_linear = BaselineInterpolators.linear_interpolation(full_target, missing_indices_global)
         predictions['linear'] = pred_linear
 
-        # === 绘制对比图 ===
+        # === Plot comparison figure ===
         fig = plt.figure(figsize=(16, 10))
         gs = gridspec.GridSpec(3, 2, hspace=0.35, wspace=0.25)
 
-        # 获取真实值
+        # Get true values
         true_values = target_data.loc[missing_indices_global].values
         x_axis = np.arange(len(missing_indices_global))
 
-        # 扩展窗口：显示缺失段前后各10天的数据
+        # Extended window: show 10 days before and after the missing segment
         window_before = 10
         window_after = 10
 
@@ -1002,80 +1026,81 @@ def plot_interpolation_comparison_figures(target_data, neighbor_data, feature_en
         extended_true = target_data.loc[extended_indices].values
         extended_x = np.arange(len(extended_indices))
 
-        # 缺失段在扩展窗口中的位置
+        # Position of missing segment within the extended window
         missing_start_in_window = start_idx_local - extended_start
         missing_end_in_window = end_idx_local - extended_start + 1
         missing_x_in_window = np.arange(missing_start_in_window, missing_end_in_window)
 
-        # 绘制6个子图
+        # Plot 6 subplots
         methods_to_plot = ['lgbm_full', 'akima', 'cubic_spline', 'knn', 'rf', 'linear']
 
         for idx, method in enumerate(methods_to_plot):
             ax = fig.add_subplot(gs[idx // 2, idx % 2])
 
-            # 绘制完整的观测数据（浅色）
+            # Plot full observed data (light color)
             ax.plot(extended_x, extended_true, 'o-', color='#CCCCCC',
                     linewidth=1.5, markersize=4, alpha=0.6, label='Observed Data')
 
-            # 高亮显示缺失段的真实值
+            # Highlight true values in the missing segment
             ax.plot(missing_x_in_window, true_values, 'o', color='#000000',
                     markersize=6, markeredgewidth=1.5, markerfacecolor='white',
                     label='True Values (Missing)', zorder=5)
 
-            # 绘制预测值
+            # Plot predicted values
             pred_values = predictions[method]
             ax.plot(missing_x_in_window, pred_values, 's-',
                     color=COLOR_SCHEME.get(method, '#1f77b4'),
                     linewidth=2.5, markersize=7, label=f'{method_names[method]} Prediction',
                     zorder=4)
 
-            # 标注缺失区域
+            # Annotate missing region
             ax.axvspan(missing_start_in_window, missing_end_in_window - 1,
                        alpha=0.15, color='red', label='Missing Period')
 
-            # 计算并显示RMSE和R
+            # Calculate and display RMSE and R
             rmse = np.sqrt(mean_squared_error(true_values, pred_values))
             try:
                 corr, _ = pearsonr(true_values, pred_values)
             except:
                 corr = 0.0
 
-            # 设置标题和标签
+            # Set title and labels
             ax.set_title(f'{method_names[method]}\nRMSE={rmse:.3f} mm, R={corr:.3f}',
                          fontsize=11, fontweight='bold', pad=8)
             ax.set_xlabel('Time (days)', fontsize=10, fontweight='bold')
             ax.set_ylabel('Displacement (mm)', fontsize=10, fontweight='bold')
 
-            # 图例
+            # Legend
             ax.legend(loc='upper left', fontsize=8, frameon=True,
                       fancybox=False, edgecolor='black')
 
-            # 网格和边框
+            # Grid and borders
             ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
 
-        # 总标题
+        # Overall title
         fig.suptitle(f'Interpolation Performance Comparison - {missing_days}-day Continuous Missing',
                      fontsize=14, fontweight='bold', y=0.995)
 
         save_path = os.path.join(output_folder, f'Fig_Interpolation_Continuous_{missing_days}days.png')
         plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
-        print(f"  ✓ 已保存: {save_path}")
+        print(f"  ✓ Saved: {save_path}")
         plt.close()
 
+    ```python
     # ====================================================================
-    # 图2: 随机聚集缺失场景 - 插补效果对比
+    # Figure 2: Random clustered missing scenario - interpolation effect comparison
     # ====================================================================
-    print("\n生成随机聚集缺失场景插补效果图...")
+    print("\nGenerating random clustered missing scenario interpolation effect figures...")
 
-    # 选择代表性的缺失比例
+    # Select representative missing ratios
     selected_ratios = [0.10, 0.20, 0.30] if 0.30 in missing_ratios else [0.10, 0.20]
 
     for missing_ratio in selected_ratios:
-        print(f"  处理 {missing_ratio * 100:.0f}% 缺失比例场景...")
+        print(f"  Processing {missing_ratio * 100:.0f}% missing ratio scenario...")
 
-        # 创建缺失数据
+        # Create missing data
         test_data = target_data.loc[test_idx].copy()
 
         masked_test, missing_indices_local = create_random_clustered_missing(
@@ -1084,18 +1109,18 @@ def plot_interpolation_comparison_figures(target_data, neighbor_data, feature_en
 
         missing_indices_global = test_idx[missing_indices_local]
 
-        # 构建完整数据
+        # Build full data with missing values
         full_target = target_data.copy()
         full_target.loc[missing_indices_global] = np.nan
 
-        # 准备特征
+        # Prepare features
         df_features = feature_engineer.create_features(
             full_target, neighbor_data,
             n_lags=7, rolling_windows=[3, 7, 14],
             include_target_lags=True, use_neighbor_lag0=True
         )
 
-        # === 执行各种插值方法 ===
+        # === Run each interpolation method ===
         predictions = {}
 
         # LightGBM-ST
@@ -1104,7 +1129,7 @@ def plot_interpolation_comparison_figures(target_data, neighbor_data, feature_en
         pred_lgbm, _, _ = interpolator.predict_with_uncertainty_residual(df_features, missing_indices_global)
         predictions['lgbm_full'] = pred_lgbm
 
-        # 其他方法
+        # Other methods
         pred_akima = TraditionalInterpolationMethods.akima_interpolation(full_target)
         predictions['akima'] = pred_akima.loc[missing_indices_global].values
 
@@ -1147,7 +1172,7 @@ def plot_interpolation_comparison_figures(target_data, neighbor_data, feature_en
         ax1.spines['right'].set_visible(False)
 
 
-# 随机缺失改进
+# Random missing improvement
 random_df = results_df[results_df['experiment_type'] == 'random_missing'] if 'results_df' in locals() and not results_df.empty else pd.DataFrame()
 if len(random_df) > 0:
     baseline_method = 'linear'
@@ -1190,27 +1215,27 @@ if len(random_df) > 0:
         ax2.spines['top'].set_visible(False)
         ax2.spines['right'].set_visible(False)
 
-# 定义输出文件夹路径
+# Define output folder path
 output_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results')
 os.makedirs(output_folder, exist_ok=True)
 
 save_path = os.path.join(output_folder, 'Fig_Performance_Improvement.png')
 plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
-print(f"✓ 已保存: {save_path}")
+print(f"✓ Saved: {save_path}")
 plt.close()
 
 print("\n" + "=" * 80)
-print("✅ 所有可视化图表生成完成!")
+print("✅ All visualization figures generated successfully!")
 print("=" * 80)
 
 
 def generate_comprehensive_summary(results_df, output_folder):
-    """生成综合汇总报告"""
+    """Generate comprehensive summary report"""
     print("\n" + "=" * 80)
-    print("📊 生成综合汇总报告")
+    print("📊 Generating Comprehensive Summary Report")
     print("=" * 80)
 
-    # 1. 总体性能排名
+    # 1. Overall performance ranking
     overall_performance = results_df.groupby('method').agg({
         'rmse_mean': 'mean',
         'mae_mean': 'mean',
@@ -1220,13 +1245,13 @@ def generate_comprehensive_summary(results_df, output_folder):
     overall_performance['rank'] = overall_performance['rmse_mean'].rank()
     overall_performance = overall_performance.sort_values('rank')
 
-    print("\n总体方法排名 (基于平均RMSE):")
+    print("\nOverall method ranking (based on mean RMSE):")
     print(overall_performance)
 
     overall_path = os.path.join(output_folder, 'summary_overall_ranking.csv')
     overall_performance.to_csv(overall_path, encoding='utf-8-sig')
 
-    # 2. 连续缺失场景汇总
+    # 2. Continuous missing scenario summary
     continuous_summary = results_df[results_df['experiment'] == 'continuous'].groupby(
         ['missing_days', 'method']
     ).agg({
@@ -1235,13 +1260,13 @@ def generate_comprehensive_summary(results_df, output_folder):
         'correlation_mean': 'mean'
     }).round(4)
 
-    print("\n连续缺失场景汇总:")
+    print("\nContinuous missing scenario summary:")
     print(continuous_summary.head(20))
 
     continuous_path = os.path.join(output_folder, 'summary_continuous.csv')
     continuous_summary.to_csv(continuous_path, encoding='utf-8-sig')
 
-    # 3. 随机缺失场景汇总
+    # 3. Random missing scenario summary
     random_summary = results_df[results_df['experiment'] == 'random'].groupby(
         ['missing_ratio', 'method']
     ).agg({
@@ -1250,26 +1275,26 @@ def generate_comprehensive_summary(results_df, output_folder):
         'correlation_mean': 'mean'
     }).round(4)
 
-    print("\n随机缺失场景汇总:")
+    print("\nRandom missing scenario summary:")
     print(random_summary.head(20))
 
     random_path = os.path.join(output_folder, 'summary_random.csv')
     random_summary.to_csv(random_path, encoding='utf-8-sig')
 
-    # 4. 最佳方法统计
+    # 4. Best method statistics
     print("\n" + "=" * 80)
-    print("🏆 最佳方法统计")
+    print("🏆 Best Method Statistics")
     print("=" * 80)
 
     best_methods = results_df.loc[
         results_df.groupby(['experiment', 'missing_days', 'missing_ratio'])['rmse_mean'].idxmin()]
     best_count = best_methods['method'].value_counts()
 
-    print("\n各方法获得最佳性能的次数:")
+    print("\nNumber of times each method achieved best performance:")
     for method, count in best_count.items():
-        print(f"  {method:20s}: {count:3d} 次")
+        print(f"  {method:20s}: {count:3d} times")
 
-    # 5. 改进百分比统计
+    # 5. Improvement percentage statistics
     baseline_method = 'linear'
 
     improvement_stats = []
@@ -1289,7 +1314,7 @@ def generate_comprehensive_summary(results_df, output_folder):
                 })
 
     improvement_df = pd.DataFrame(improvement_stats)
-    print("\n平均改进百分比 (相比Linear插值):")
+    print("\nAverage improvement percentage (compared to Linear interpolation):")
     print(improvement_df)
 
     improvement_path = os.path.join(output_folder, 'summary_improvement.csv')
@@ -1297,22 +1322,24 @@ def generate_comprehensive_summary(results_df, output_folder):
 
 
 # =====================================================================
-# 主程序
+# Main Program
 # =====================================================================
 if __name__ == "__main__":
     print("\n" + "=" * 80)
-    print("LightGBM + 传统插值方法综合对比系统")
+    print("LightGBM + Traditional Interpolation Methods Comprehensive Comparison System")
     print("=" * 80)
-    print(f"配置信息:")
-    print(f"  - 目标站点: {TARGET_STATION}")
-    print(f"  - 邻近站点: {NEIGHBOR_STATION}")
-    print(f"  - 分析时间段: {START_DATE} 至 {END_DATE}")
-    print(f"  - 重复实验次数: {N_REPEATS}")
-    print(f"  - Bootstrap模型数: {N_BOOTSTRAP}")
+    print(f"Configuration:")
+    print(f"  - Target station: {TARGET_STATION}")
+    print(f"  - Neighbor station: {NEIGHBOR_STATION}")
+    print(f"  - Spatial correlation: r = {CORRELATION_R:.4f}")
+    print(f"  - Station distance: {NEIGHBOR_DIST_KM:.2f} km")
+    print(f"  - Analysis period: {START_DATE} to {END_DATE}")
+    print(f"  - Number of repeated experiments: {N_REPEATS}")
+    print(f"  - Bootstrap model count: {N_BOOTSTRAP}")
     print("=" * 80)
 
-    # 1. 加载数据
-    print("\n加载数据...")
+    # 1. Load data
+    print("\nLoading data...")
     try:
         df_target = pd.read_csv(
             os.path.join(FOLDER, f"{TARGET_STATION}.csv"),
@@ -1336,20 +1363,20 @@ if __name__ == "__main__":
         target_data = target_data.reindex(full_date_range)
         neighbor_data = neighbor_data.reindex(full_date_range)
 
-        print(f"✓ 数据加载成功")
-        print(f"  - 目标站: {len(target_data)} 天, 缺失 {target_data.isna().sum()} 天")
-        print(f"  - 邻站: {len(neighbor_data)} 天, 缺失 {neighbor_data.isna().sum()} 天")
+        print(f"✓ Data loaded successfully")
+        print(f"  - Target station: {len(target_data)} days, missing {target_data.isna().sum()} days")
+        print(f"  - Neighbor station: {len(neighbor_data)} days, missing {neighbor_data.isna().sum()} days")
 
     except Exception as e:
-        print(f"[错误] 数据加载失败: {e}")
+        print(f"[Error] Data loading failed: {e}")
         exit(1)
 
-    # 2. 创建输出文件夹
+    # 2. Create output folder
     output_folder = os.path.join(FOLDER, "comprehensive_comparison_results")
     os.makedirs(output_folder, exist_ok=True)
-    print(f"\n✓ 输出文件夹: {output_folder}")
+    print(f"\n✓ Output folder: {output_folder}")
 
-    # 3. 确定实验参数
+    # 3. Determine experiment parameters
     sample_length = len(target_data)
 
     if sample_length > 1000:
@@ -1361,30 +1388,30 @@ if __name__ == "__main__":
 
     missing_ratios = np.arange(0.05, 0.55, 0.05)
 
-    print(f"\n实验配置:")
-    print(f"  - 连续缺失天数: {missing_days_list}")
-    print(f"  - 随机缺失比例: {[f'{r * 100:.0f}%' for r in missing_ratios]}")
+    print(f"\nExperiment configuration:")
+    print(f"  - Continuous missing days: {missing_days_list}")
+    print(f"  - Random missing ratios: {[f'{r * 100:.0f}%' for r in missing_ratios]}")
 
-    # 导入所需函数
-    from LightGBM和其他方法对比 import plot_sci_comparison_figures, generate_comprehensive_summary
 
-    # 4. 运行实验
+    # 4. Run experiments
     results_df, final_interpolator = run_comprehensive_experiments(
         target_data, neighbor_data,
         missing_days_list, missing_ratios,
         output_folder
     )
 
-    # 5. 生成可视化
+    # 5. Generate visualizations
     plot_sci_comparison_figures(results_df, output_folder)
 
-    # 6. 生成汇总报告
+    # 6. Generate summary report
     generate_comprehensive_summary(results_df, output_folder)
 
-    # 7. 保存配置信息
+    # 7. Save configuration info
     config_info = {
         'target_station': TARGET_STATION,
         'neighbor_station': NEIGHBOR_STATION,
+        'correlation_r': CORRELATION_R,
+        'neighbor_dist_km': NEIGHBOR_DIST_KM,
         'bias_value': BIAS_VALUE,
         'time_range': f"{START_DATE} to {END_DATE}",
         'data_length': sample_length,
@@ -1402,18 +1429,22 @@ if __name__ == "__main__":
         json.dump(config_info, f, indent=4, ensure_ascii=False)
 
     print("\n" + "=" * 80)
-    print("✅ 实验完成!")
+    print("✅ Experiment complete!")
     print("=" * 80)
-    print(f"所有结果已保存至: {output_folder}")
-    print(f"\n生成的文件:")
-    print(f"  数据结果:")
-    print(f"    - comprehensive_results.csv (完整实验结果)")
-    print(f"    - summary_continuous.csv (连续缺失汇总)")
-    print(f"    - summary_random.csv (随机缺失汇总)")
-    print(f"    - summary_improvement.csv (改进百分比)")
-    print(f"  可视化图表:")
-    print(f"    - Fig_Continuous_Comprehensive.png (连续缺失综合对比)")
-    print(f"    - Fig_Random_Comprehensive.png (随机缺失综合对比)")
-    print(f"  配置文件:")
+    print(f"All results saved to: {output_folder}")
+    print(f"\nGenerated files:")
+    print(f"  Data results:")
+    print(f"    - comprehensive_results.csv (complete experiment results)")
+    print(f"    - summary_overall_ranking.csv (overall method ranking)")
+    print(f"    - summary_continuous.csv (continuous missing summary)")
+    print(f"    - summary_random.csv (random missing summary)")
+    print(f"    - summary_improvement.csv (improvement percentages)")
+    print(f"  Visualization figures:")
+    print(f"    - Fig_Continuous_Comprehensive.png (continuous missing comprehensive comparison)")
+    print(f"    - Fig_Random_Comprehensive.png (random missing comprehensive comparison)")
+    print(f"    - Fig_Radar_Comparison.png (radar chart comparison)")
+    print(f"    - Fig_Performance_Improvement.png (performance improvement figure)")
+    print(f"  Configuration file:")
     print(f"    - experiment_config.json")
     print("=" * 80 + "\n")
+```
